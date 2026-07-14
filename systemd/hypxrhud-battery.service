@@ -1,0 +1,35 @@
+# hypxrhud-battery — headset (WiVRn) + laptop (UPower) battery gauges for the HUD.
+#
+# A tiny sd-bus client that feeds the hypxrhud `battery` slot. It talks to three services,
+# all optional at runtime: the hypxrhud daemon (session bus — bus-activated on the first
+# CreatePanel, so this unit need not be ordered after it), WiVRn (session bus), and UPower
+# (system bus). Any absent source is simply omitted from the panel.
+#
+# Install (manual/dev):
+#   mkdir -p ~/.config/systemd/user
+#   cp systemd/hypxrhud-battery.service ~/.config/systemd/user/
+#   sed -i "s|/usr/bin/hypxrhud-battery|$HOME/.local/bin/hypxrhud-battery|" \
+#       ~/.config/systemd/user/hypxrhud-battery.service   # if not packaged in /usr/bin
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now hypxrhud-battery.service
+#
+# STANDALONE: the client is a plain sd-bus CLIENT (it owns no well-known name). It works
+# without the hypxrhud unit being pre-started because its first CreatePanel BUS-ACTIVATES
+# the daemon (After=hypxrhud.service only orders start-up when both are enabled; it is not a
+# hard Requires=). It is long-lived and idempotent — it only calls UpdatePanel when a gauge
+# actually changes (and re-reads early on a UPower/WiVRn PropertiesChanged), so an idle
+# desktop pays essentially nothing.
+
+[Unit]
+Description=hypxrhud battery gauges (headset + laptop)
+After=graphical-session.target hypxrhud.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/hypxrhud-battery
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

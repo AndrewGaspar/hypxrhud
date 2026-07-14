@@ -99,8 +99,28 @@ and the oldest is evicted past `max`. A panel may set `slot = ""` + an explicit
 `pose` to bypass slotting (free placement).
 
 The **battery** panel carries **two** gauges — headset battery (from WiVRn) and
-laptop battery (from upower) — each `{label, percent, charging}`. The battery
-*client* is a later WP; the content model and preview already support it.
+laptop battery (from upower) — each `{label, percent, charging}`. The first-party
+client that fills it is [`hypxrhud-battery`](#hypxrhud-battery-battery-gauges) (below).
+
+### `hypxrhud-battery` (battery gauges)
+
+A small standalone sd-bus client (`src/battery/`) that feeds the `battery` slot:
+
+- **Laptop** battery from UPower's `DisplayDevice` (`Percentage`/`State`), on the system
+  bus; omitted on a desktop with no battery. Works out of the box.
+- **Headset** battery from WiVRn. As of WiVRn **v26.6.1** the headset charge is not
+  exposed on any external interface — it lives only inside the Monado HMD device — so the
+  headset gauge is gated behind a forward-compatible seam that lights up the moment WiVRn
+  publishes a `Battery` D-Bus property. See [`docs/battery-wivrn.md`](docs/battery-wivrn.md)
+  for the full mechanism, source citations, and the minimal WiVRn patch.
+
+It polls on a config interval (default 30 s), also wakes early on a UPower/WiVRn
+`PropertiesChanged`, and only calls `UpdatePanel` when the rounded gauges change
+(zero-cost-when-static). A configurable low-battery threshold (default 15 %) posts a
+one-shot toast per source per discharge cycle. Config: `examples/battery.toml`
+(`[battery]` section, `~/.config/hypxrhud/battery.toml`); unit:
+`systemd/hypxrhud-battery.service`. Run `hypxrhud-battery --once --verbose` to print a
+one-shot source read without looping.
 
 ## Building
 

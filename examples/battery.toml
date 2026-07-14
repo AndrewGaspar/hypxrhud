@@ -1,0 +1,31 @@
+# hypxrhud-battery — example configuration.
+#
+# Copy to $XDG_CONFIG_HOME/hypxrhud/battery.toml (or ~/.config/hypxrhud/battery.toml).
+# All keys are optional; the values shown are the defaults. Same thin TOML subset the
+# daemon uses (one struct) — do not rely on advanced TOML features.
+
+[battery]
+# How often the sources are polled. The client ALSO wakes early on a UPower or WiVRn
+# PropertiesChanged signal, so this is an upper bound, not a busy loop.
+poll_interval_sec = 30
+
+# One-shot low-battery toast: fires once when a source is discharging at/below this percent,
+# and re-arms (so the next discharge cycle warns again) once it charges or rises back to
+# low_threshold + low_hysteresis.
+low_threshold  = 15
+low_hysteresis = 5
+toasts         = true
+
+# Which gauges to show. The headset gauge is fed by WiVRn (see docs/battery-wivrn.md — it
+# only appears once WiVRn exposes the headset battery on D-Bus; a headset that is connected
+# but whose charge is not readable is omitted rather than shown blank). The laptop gauge is
+# fed by UPower's DisplayDevice and is omitted on a desktop with no battery.
+headset = true
+laptop  = true
+
+# Gauge labels (shown next to each meter).
+headset_label = "headset"
+laptop_label  = "laptop"
+
+# The HUD slot the battery panel targets (default bottom-left per hypxrhud's slot layout).
+slot = "battery"
