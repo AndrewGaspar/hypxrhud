@@ -3,6 +3,8 @@
 #include "Config.hpp"
 #include "Dbus.hpp"
 #include "Scene.hpp"
+#include "Theme.hpp"
+#include "ThemeWatch.hpp"
 
 #include <cstdint>
 #include <string>
@@ -47,6 +49,7 @@ class CDaemon {
     int         computeTimeoutMs() const; // poll() timeout for this tick.
     void        reapAndEmit(int64_t nowMs);
     void        drainStdin(int64_t nowMs);
+    void        reloadPalette();          // re-resolve the theme palette + force a re-raster.
 
 #ifdef HAVE_XR
     void tryBringUp(int64_t nowMs);   // one probe attempt; schedules the next on failure.
@@ -59,6 +62,12 @@ class CDaemon {
 
     CScene m_scene;
     CBus   m_bus;
+
+    // WP-H6 theming: the active palette (resolved from the Omarchy current theme + config
+    // overrides) and the inotify watch that reloads it live when the theme is switched.
+    SPalette    m_palette;
+    CThemeWatch m_themeWatch;
+    bool        m_themeWatchOk = false;
 
     ERuntime m_state = ERuntime::Absent;
 

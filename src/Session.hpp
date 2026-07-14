@@ -15,6 +15,7 @@
 
 #include "Config.hpp"
 #include "Scene.hpp"
+#include "Theme.hpp"
 
 #include <cstdint>
 #include <map>
@@ -77,6 +78,11 @@ class CSession {
     // event sets lost(); the daemon distinguishes a requested exit from a surprise loss.
     void requestExit();
 
+    // Set the active theming palette (WP-H6). The daemon calls this at bring-up and on a
+    // live theme reload; the caller force-dirties the scene so every panel re-rasters in the
+    // new colours on the next frame.
+    void setPalette(const SPalette& pal) { m_palette = pal; }
+
     bool          lost() const { return m_lost; }
     bool          sessionRunning() const { return m_sessionRunning; }
     CScene&       scene() { return *m_scene; }
@@ -124,6 +130,7 @@ class CSession {
 
     std::string                    m_runtimeName;
     std::map<uint32_t, SGpuPanel>  m_gpu;
+    SPalette                       m_palette; // active theming palette (WP-H6).
 };
 
 } // namespace hud

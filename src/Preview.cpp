@@ -71,7 +71,7 @@ void buildPreviewScene(CScene& scene, int64_t nowMs) {
     }
 }
 
-SImage renderPreview(const CScene& scene, int W, int H, int texW, int texH) {
+SImage renderPreview(const CScene& scene, int W, int H, int texW, int texH, const SPalette& pal) {
     SImage out;
     out.w = W;
     out.h = H;
@@ -130,7 +130,7 @@ SImage renderPreview(const CScene& scene, int W, int H, int texW, int texH) {
     };
 
     for (const auto& [id, p] : scene.panels()) {
-        SImage     tex   = renderPanel(p.content, texW, texH);
+        SImage     tex   = renderPanel(p.content, texW, texH, pal);
         if (tex.empty())
             continue;
         SPlacement place = scene.placementOf(p);
@@ -145,7 +145,7 @@ SImage renderPreview(const CScene& scene, int W, int H, int texW, int texH) {
     // A caption strip so the artifact is self-describing.
     SPanelContent cap;
     cap.lines = {{"hypxrhud — six-slot HUD preview", EColor::Dim, false}};
-    SImage capImg = renderPanel(cap, 640, 96);
+    SImage capImg = renderPanel(cap, 640, 96, pal);
     blit(capImg, cx - 320.f, 24.f, 640.f, 96.f, 0.9f);
 
     return out;

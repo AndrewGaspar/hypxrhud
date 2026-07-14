@@ -69,6 +69,53 @@ TEST_CASE("config: unknown keys warn but do not fail; bad enum errors") {
     CHECK_FALSE(e.empty());
 }
 
+TEST_CASE("config: [theme] follow/file/overrides parse (WP-H6)") {
+    const char* text =
+        "[theme]\n"
+        "follow = false\n"
+        "file = \"/some/theme/mako.ini\"\n"
+        "accent = \"#00FF00\"\n"
+        "panel_bg = \"#101010\"\n";
+    SConfig cfg;
+    std::vector<std::string> e, w;
+    REQUIRE(parseConfig(text, cfg, e, w));
+    CHECK(cfg.themeFollow == false);
+    CHECK(cfg.themeFile == "/some/theme/mako.ini");
+    REQUIRE(cfg.colorOverrides.count("accent"));
+    CHECK(cfg.colorOverrides.at("accent") == "#00FF00");
+    CHECK(cfg.colorOverrides.at("panel_bg") == "#101010");
+
+    // A bare boolean is also accepted.
+    SConfig cfg2;
+    e.clear(); w.clear();
+    REQUIRE(parseConfig("[theme]\nfollow = true\n", cfg2, e, w));
+    CHECK(cfg2.themeFollow == true);
+}
+
+TEST_CASE("config: slot on_refuse=queue applies to the registry (WP-H5)") {
+    const char* text =
+        "[slot.voice]\n"
+        "on_refuse = \"queue\"\n"
+        "[slot.keys]\n"
+        "on_refuse = \"refuse\"\n";
+    SConfig cfg;
+    std::vector<std::string> e, w;
+    REQUIRE(parseConfig(text, cfg, e, w));
+
+    CSlots slots;
+    cfg.applySlots(slots);
+    CHECK(slots.find("voice")->onRefuse == ERefusePolicy::Queue);
+    CHECK(slots.find("keys")->onRefuse == ERefusePolicy::Refuse);
+    // Untouched slots keep the default (refuse).
+    CHECK(slots.find("toast")->onRefuse == ERefusePolicy::Refuse);
+
+    // A bad value errors.
+    SConfig bad;
+    e.clear(); w.clear();
+    CHECK_FALSE(parseConfig("[slot.voice]\non_refuse = \"maybe\"\n", bad, e, w));
+    CHECK_FALSE(e.empty());
+}
+
 TEST_CASE("config: a missing file yields defaults, not an error") {
     SConfig cfg;
     std::vector<std::string> e, w;

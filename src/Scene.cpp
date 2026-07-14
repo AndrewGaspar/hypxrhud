@@ -61,17 +61,24 @@ uint32_t CScene::upsert(const SUpsert& u, int64_t nowMs, std::vector<SDismissal>
             SPanel& p = it->second;
 
             // If the panel is (re)entering a busy singleton slot owned by someone else,
-            // arbitrate exactly as a fresh create would.
-            if (slot && !slot->stack && u.slot != p.slot) {
-                for (auto& [oid, op] : m_panels) {
-                    if (oid == u.id || op.slot != u.slot)
-                        continue;
-                    if (u.urgency < op.urgency)
-                        return 0; // lower-priority newcomer refused the occupied slot.
-                    if (dismissed)
-                        dismissed->push_back({oid, "preempted"});
-                    m_panels.erase(oid);
-                    break;
+            // arbitrate exactly as a fresh create would (skip queued members + self).
+            const bool singletonMove = slot && !slot->stack && u.slot != p.slot;
+            bool       makeQueued    = false;
+            if (singletonMove) {
+                uint32_t occ = 0;
+                for (auto& [oid, op] : m_panels)
+                    if (oid != u.id && op.slot == u.slot && !op.queued) { occ = oid; break; }
+                if (occ) {
+                    if (u.urgency < m_panels.at(occ).urgency) {
+                        if (slot->onRefuse == ERefusePolicy::Queue)
+                            makeQueued = true; // held pending; promoted when the slot frees.
+                        else
+                            return 0;          // lower-priority newcomer refused the slot.
+                    } else {
+                        if (dismissed)
+                            dismissed->push_back({occ, "preempted"}); // equal => last-writer-wins.
+                        m_panels.erase(occ);
+                    }
                 }
             }
 
@@ -83,11 +90,14 @@ uint32_t CScene::upsert(const SUpsert& u, int64_t nowMs, std::vector<SDismissal>
             p.hasPose = u.hasPose; p.px = u.px; p.py = u.py; p.pz = u.pz;
             p.hasSize = u.hasSize; p.sizeW = u.sizeW;
             p.fade    = u.fade;
+            if (singletonMove)
+                p.queued = makeQueued; // moving into a slot resolves the panel's queued state.
             if (changed) {
                 p.content   = u.content;
                 p.epoch++;            // triggers a single re-raster + upload on the XR side.
                 p.shownAtMs = nowMs;  // refresh the dwell for the new content.
             }
+            reconcileQueues(nowMs); // a vacated singleton slot may promote a queued panel.
             return u.id;
         }
         // Unknown id: fall through and create (best-effort under a lossy transport).
@@ -97,17 +107,25 @@ uint32_t CScene::upsert(const SUpsert& u, int64_t nowMs, std::vector<SDismissal>
     if (ownerCount(u.owner) >= static_cast<size_t>(m_perClientCap))
         return 0; // per-client cap reached (design memo §5 / triage #9: default 4).
 
+    bool createQueued = false;
     if (slot && !slot->stack) {
-        // Singleton slot: arbitrate against any current occupant.
-        for (auto& [oid, op] : m_panels) {
-            if (op.slot != u.slot)
-                continue;
-            if (u.urgency < op.urgency)
-                return 0; // occupant outranks the newcomer.
-            if (dismissed)
-                dismissed->push_back({oid, "preempted"}); // equal => last-writer-wins.
-            m_panels.erase(oid);
-            break; // invariant: at most one occupant.
+        // Singleton slot: arbitrate against the current ACTIVE occupant (queued members don't
+        // hold the slot). Equal urgency = last-writer-wins; higher preempts; a strictly-lower
+        // newcomer is refused, or held-pending under on_refuse=queue (WP-H5, §4.2).
+        uint32_t occ = 0;
+        for (auto& [oid, op] : m_panels)
+            if (op.slot == u.slot && !op.queued) { occ = oid; break; }
+        if (occ) {
+            if (u.urgency < m_panels.at(occ).urgency) {
+                if (slot->onRefuse == ERefusePolicy::Queue)
+                    createQueued = true;
+                else
+                    return 0; // occupant outranks the newcomer.
+            } else {
+                if (dismissed)
+                    dismissed->push_back({occ, "preempted"});
+                m_panels.erase(occ); // invariant: at most one active occupant.
+            }
         }
     } else if (slot && slot->stack) {
         // Stack slot: evict the oldest while at capacity.
@@ -138,41 +156,104 @@ uint32_t CScene::upsert(const SUpsert& u, int64_t nowMs, std::vector<SDismissal>
     p.content   = u.content;
     p.shownAtMs = nowMs;
     p.epoch     = 1;
+    p.queued    = createQueued;
     uint32_t id = p.id;
     m_panels.emplace(id, std::move(p));
     return id;
 }
 
-bool CScene::dismiss(uint32_t id, const std::string&) {
-    return m_panels.erase(id) > 0;
+bool CScene::dismiss(uint32_t id, const std::string&, int64_t nowMs) {
+    const bool erased = m_panels.erase(id) > 0;
+    if (erased && nowMs > 0)
+        reconcileQueues(nowMs); // the freed slot may promote a queued panel (WP-H5).
+    return erased;
 }
 
-void CScene::dropOwner(const std::string& owner, std::vector<SDismissal>* dismissed) {
+void CScene::dropOwner(const std::string& owner, std::vector<SDismissal>* dismissed, int64_t nowMs) {
+    bool removed = false;
     for (auto it = m_panels.begin(); it != m_panels.end();) {
         if (it->second.owner == owner) {
             if (dismissed)
                 dismissed->push_back({it->first, "client-gone"});
-            it = m_panels.erase(it);
+            it      = m_panels.erase(it);
+            removed = true;
         } else {
             ++it;
         }
     }
+    if (removed && nowMs > 0)
+        reconcileQueues(nowMs);
 }
 
 void CScene::reapExpired(int64_t nowMs, std::vector<SDismissal>* dismissed) {
+    bool removed = false;
     for (auto it = m_panels.begin(); it != m_panels.end();) {
         const SPanel& p = it->second;
+        // Queued panels have no running envelope — they never expire (WP-H5).
+        if (p.queued) { ++it; continue; }
         const bool transient = p.fade.holdMs >= 0;
         if (transient && alphaOf(p, nowMs) <= kVisibleAlpha) {
             const int64_t total = std::max(0, p.fade.riseMs) + p.fade.holdMs + std::max(0, p.fade.fadeMs);
             if (nowMs - p.shownAtMs >= total) {
                 if (dismissed)
                     dismissed->push_back({it->first, "expired"});
-                it = m_panels.erase(it);
+                it      = m_panels.erase(it);
+                removed = true;
                 continue;
             }
         }
         ++it;
+    }
+    if (removed)
+        reconcileQueues(nowMs); // an expired singleton occupant may promote a queued panel.
+}
+
+void CScene::forceRedrawAll() {
+    for (auto& [id, p] : m_panels)
+        p.epoch++;
+}
+
+std::vector<SSlotStat> CScene::slotStats() const {
+    std::vector<SSlotStat> out;
+    for (const auto& s : m_slots.all()) {
+        SSlotStat st;
+        st.name = s.name;
+        for (const auto& [id, p] : m_panels)
+            if (p.slot == s.name) {
+                if (p.queued) st.queued++;
+                else          st.active++;
+            }
+        out.push_back(st);
+    }
+    return out;
+}
+
+void CScene::reconcileQueues(int64_t nowMs) {
+    for (const auto& slot : m_slots.all()) {
+        if (slot.stack)
+            continue; // stacks never queue.
+        bool hasActive = false;
+        for (const auto& [id, p] : m_panels)
+            if (p.slot == slot.name && !p.queued) { hasActive = true; break; }
+        if (hasActive)
+            continue;
+        // Promote the best pending panel: highest urgency, then oldest (smallest id).
+        uint32_t best = 0;
+        int      bestUrg = -1;
+        for (const auto& [id, p] : m_panels) {
+            if (p.slot != slot.name || !p.queued)
+                continue;
+            if (p.urgency > bestUrg || (p.urgency == bestUrg && (best == 0 || id < best))) {
+                best    = id;
+                bestUrg = p.urgency;
+            }
+        }
+        if (best) {
+            SPanel& p   = m_panels.at(best);
+            p.queued    = false;
+            p.shownAtMs = nowMs; // start its envelope now that it is on screen.
+            p.epoch++;           // force the XR side to raster it.
+        }
     }
 }
 
@@ -213,7 +294,7 @@ float CScene::alphaOf(const SPanel& p, int64_t nowMs) const {
 std::vector<uint32_t> CScene::submitOrder(int64_t nowMs, int budget) const {
     std::vector<uint32_t> vis;
     for (const auto& [id, p] : m_panels)
-        if (alphaOf(p, nowMs) > kVisibleAlpha)
+        if (!p.queued && alphaOf(p, nowMs) > kVisibleAlpha) // queued panels are not submitted.
             vis.push_back(id);
 
     // Bottom -> top for the layers[] array (later = on top). Higher urgency and newer

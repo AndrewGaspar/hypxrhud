@@ -15,21 +15,9 @@ extern "C" const unsigned int  g_hudFontDataSize;
 namespace hud {
 
 namespace {
-    struct SRgb { uint8_t r, g, b; };
-
-    // The semantic palette. SINGLE SOURCE OF TRUTH for panel colours — WP-H6 (theming)
-    // replaces the constants here with values sourced from the Omarchy current theme.
-    SRgb colorFor(EColor c) {
-        switch (c) {
-            case EColor::Normal: return {235, 238, 242};
-            case EColor::Dim:    return {150, 158, 168};
-            case EColor::Accent: return {120, 190, 255};
-            case EColor::Good:   return {120, 220, 150};
-            case EColor::Warn:   return {250, 200, 110};
-            case EColor::Bad:    return {255, 120, 120};
-        }
-        return {235, 238, 242};
-    }
+    // WP-H6: colours now come from an SPalette (Theme.hpp), threaded into renderPanel, so a
+    // themed daemon and --preview --theme render in the active Omarchy palette. SRgb lives in
+    // Theme.hpp; the concrete role->colour lookup is paletteColor().
 
     struct SFont {
         stbtt_fontinfo info{};
@@ -182,7 +170,7 @@ namespace {
     }
 }
 
-SImage renderPanel(const SPanelContent& content, int texW, int texH) {
+SImage renderPanel(const SPanelContent& content, int texW, int texH, const SPalette& pal) {
     SImage img;
     img.w = texW;
     img.h = texH;
@@ -242,13 +230,14 @@ SImage renderPanel(const SPanelContent& content, int texW, int texH) {
     int panelY0 = (texH - panelH) / 2;
 
     fillRoundRect(c, panelX0, panelY0, panelX0 + panelW, panelY0 + panelH,
-                  static_cast<int>(std::round(texH * 0.05f)), 0.05f, 0.06f, 0.08f, 0.66f);
+                  static_cast<int>(std::round(texH * 0.05f)), pal.panelBg.r / 255.f,
+                  pal.panelBg.g / 255.f, pal.panelBg.b / 255.f, pal.panelAlpha);
 
     // ---- text lines + confidence bar (voice/keys/toast/status/media) ----
     int penY = panelY0 + padY;
     for (auto& l : laid) {
         penY += l.m.ascent;
-        drawText(c, l.line->text, panelX0 + padX, penY, l.px, colorFor(l.line->color));
+        drawText(c, l.line->text, panelX0 + padX, penY, l.px, paletteColor(pal, l.line->color));
         penY += (-l.m.descent) + lineGap;
 
         if (showBar && !content.lines.empty() && l.line == &content.lines.front()) {
@@ -256,11 +245,12 @@ SImage renderPanel(const SPanelContent& content, int texW, int texH) {
             int  barX1 = panelX0 + panelW - padX;
             int  barY0 = penY;
             int  barY1 = penY + barH;
-            fillRoundRect(c, barX0, barY0, barX1, barY1, barH / 2, 0.25f, 0.27f, 0.3f, 0.55f);
+            fillRoundRect(c, barX0, barY0, barX1, barY1, barH / 2, pal.barTrack.r / 255.f,
+                          pal.barTrack.g / 255.f, pal.barTrack.b / 255.f, 0.55f);
             int  fillW = static_cast<int>(std::round((barX1 - barX0) * std::clamp(content.confidence, 0.f, 1.f)));
-            SRgb bc2 = content.confidence >= 0.75f ? colorFor(EColor::Good)
-                       : content.confidence >= 0.5f ? colorFor(EColor::Warn)
-                                                    : colorFor(EColor::Bad);
+            SRgb bc2 = content.confidence >= 0.75f ? paletteColor(pal, EColor::Good)
+                       : content.confidence >= 0.5f ? paletteColor(pal, EColor::Warn)
+                                                    : paletteColor(pal, EColor::Bad);
             fillRoundRect(c, barX0, barY0, barX0 + std::max(barH, fillW), barY1, barH / 2,
                           bc2.r / 255.f, bc2.g / 255.f, bc2.b / 255.f, 0.95f);
             penY += barH + lineGap;
@@ -271,14 +261,14 @@ SImage renderPanel(const SPanelContent& content, int texW, int texH) {
     if (!content.gauges.empty()) {
         const int barH2 = static_cast<int>(std::round(bodyPx * 0.34f));
         for (const auto& g : content.gauges) {
-            SRgb        fg  = colorFor(gaugeColor(g));
+            SRgb        fg  = paletteColor(pal, gaugeColor(g));
             std::string pct = gaugePercentText(g);
             SLineMetrics pm = measure(pct, bodyPx);
 
             // Label baseline near the top of the row.
             SLineMetrics lm = measure(g.label, bodyPx);
             int labelBaseline = penY + lm.ascent;
-            drawText(c, g.label, panelX0 + padX, labelBaseline, bodyPx, colorFor(EColor::Normal));
+            drawText(c, g.label, panelX0 + padX, labelBaseline, bodyPx, paletteColor(pal, EColor::Normal));
             // Percent text right-aligned on the same baseline.
             drawText(c, pct, panelX0 + panelW - padX - pm.width, labelBaseline, bodyPx, fg);
 
@@ -287,7 +277,8 @@ SImage renderPanel(const SPanelContent& content, int texW, int texH) {
             int barX1 = panelX0 + panelW - padX;
             int barY0 = labelBaseline + (-lm.descent) + static_cast<int>(std::round(bodyPx * 0.12f));
             int barY1 = barY0 + barH2;
-            fillRoundRect(c, barX0, barY0, barX1, barY1, barH2 / 2, 0.25f, 0.27f, 0.3f, 0.55f);
+            fillRoundRect(c, barX0, barY0, barX1, barY1, barH2 / 2, pal.barTrack.r / 255.f,
+                          pal.barTrack.g / 255.f, pal.barTrack.b / 255.f, 0.55f);
             float frac  = g.percent < 0.f ? 0.f : std::clamp(g.percent / 100.f, 0.f, 1.f);
             int   fillW = static_cast<int>(std::round((barX1 - barX0) * frac));
             if (fillW > 0)

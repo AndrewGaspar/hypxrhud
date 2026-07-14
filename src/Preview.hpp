@@ -22,6 +22,9 @@ void buildPreviewScene(CScene& scene, int64_t nowMs);
 // Composite the scene's panels into a W x H image. Each panel is rasterised at
 // texW x texH and blitted at its projected screen position and scale, at its peak
 // opacity (envelope timing is ignored — the preview shows every panel fully visible).
-SImage renderPreview(const CScene& scene, int W, int H, int texW, int texH);
+// The palette (WP-H6) themes the panels; the default is the built-in palette, and
+// --preview --theme <dir> passes an Omarchy-resolved one for offline evidence.
+SImage renderPreview(const CScene& scene, int W, int H, int texW, int texH,
+                     const SPalette& palette = defaultPalette());
 
 } // namespace hud

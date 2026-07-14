@@ -13,3 +13,6 @@ compile_commands.json
 
 # Preview / scratch artifacts
 /*.png
+
+# Preview / self-test artifacts
+/artifacts/

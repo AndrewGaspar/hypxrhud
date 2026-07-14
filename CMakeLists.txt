@@ -50,6 +50,7 @@ add_library(hypxrhud_core STATIC
     src/Scene.cpp
     src/Config.cpp
     src/Props.cpp
+    src/Theme.cpp
     src/PanelText.cpp
     src/PngWrite.cpp
     src/Wire.cpp
@@ -69,7 +70,7 @@ set_source_files_properties(src/stb_impl.cpp PROPERTIES COMPILE_OPTIONS "-w")
 # The D-Bus front end (Dbus) + persistent event loop / backoff (Daemon) are ALWAYS built —
 # a box without an XR runtime still runs the daemon (owns the bus, accepts panels, reports
 # the runtime "absent"). The XR overlay session (Egl + Session) is added only under HAVE_XR.
-add_executable(hypxrhud src/main.cpp src/Dbus.cpp src/Daemon.cpp)
+add_executable(hypxrhud src/main.cpp src/Dbus.cpp src/Daemon.cpp src/ThemeWatch.cpp src/SelfTest.cpp)
 target_link_libraries(hypxrhud PRIVATE hypxrhud_core PkgConfig::libsystemd)
 target_compile_options(hypxrhud PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 if(HAVE_XR)
@@ -88,6 +89,10 @@ install(FILES dbus/io.github.andrewgaspar.hypxrhud.service
 install(FILES systemd/hypxrhud.service
         DESTINATION lib/systemd/user)
 
+# ---- example config + licence ----
+install(FILES examples/hypxrhud.toml DESTINATION share/hypxrhud/examples)
+install(FILES LICENSE                 DESTINATION share/licenses/hypxrhud)
+
 # ---- tests (doctest) ----
 enable_testing()
 add_executable(hypxrhud_tests
@@ -102,6 +107,8 @@ add_executable(hypxrhud_tests
     tests/test_preview.cpp
     tests/test_props.cpp     # WP-H3: props -> SUpsert mapping
     tests/test_backoff.cpp   # WP-H4: re-probe backoff schedule
+    tests/test_theme.cpp     # WP-H6: palette parser + resolution (fixtures)
+    tests/test_arbiter.cpp   # WP-H5: slot queueing + occupancy introspection
 )
 target_include_directories(hypxrhud_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 target_link_libraries(hypxrhud_tests PRIVATE hypxrhud_core)

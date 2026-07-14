@@ -28,14 +28,22 @@ struct SPlacement {
     std::string space = "view";                 // "view" (head-locked) | "local" (world-fixed).
 };
 
+// What happens to a LOWER-urgency newcomer that contends a busy singleton slot (design
+// memo §4.2.1). Refuse = reject it outright (the create returns 0 / a D-Bus error);
+// Queue = accept it held-pending and promote it into the slot when the occupant leaves.
+// (Equal-urgency contention is always last-writer-wins, and higher urgency always preempts;
+// this policy only governs the strictly-lower-urgency loser.)
+enum class ERefusePolicy { Refuse, Queue };
+
 struct SSlot {
-    std::string name;
-    float       px = 0.f, py = 0.f, pz = -1.0f;
-    float       sizeW = 0.42f;
-    std::string space = "view";
-    bool        stack    = false; // true = bounded vertical stack (toast); false = singleton.
-    int         maxStack = 3;      // stack cap; oldest evicted past this.
-    float       stackDy  = 0.16f;  // per-entry vertical offset for a stack, metres (+ = up).
+    std::string   name;
+    float         px = 0.f, py = 0.f, pz = -1.0f;
+    float         sizeW = 0.42f;
+    std::string   space = "view";
+    bool          stack    = false; // true = bounded vertical stack (toast); false = singleton.
+    int           maxStack = 3;      // stack cap (stack slots) / queue cap (singleton, WP-H5).
+    float         stackDy  = 0.16f;  // per-entry vertical offset for a stack, metres (+ = up).
+    ERefusePolicy onRefuse = ERefusePolicy::Refuse; // singleton contention loser policy (§4.2).
 };
 
 // The slot registry: the six defaults, each overridable. `find` returns nullptr for an

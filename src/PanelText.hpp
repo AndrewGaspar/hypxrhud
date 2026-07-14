@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Panel.hpp"
+#include "Theme.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -28,8 +29,10 @@ struct SImage {
 
 // Render `content` into a texW x texH transparent canvas with a compact rounded panel
 // hugging the content (transparent margins let the world/monitors show through). An
-// empty content yields a fully transparent image. Deterministic — same content in,
-// same pixels out (the offline correctness surface).
-SImage renderPanel(const SPanelContent& content, int texW = 768, int texH = 384);
+// empty content yields a fully transparent image. Deterministic — same content + palette
+// in, same pixels out (the offline correctness surface). The palette (WP-H6 theming) maps
+// the semantic EColor roles to concrete colours; the default is the built-in palette.
+SImage renderPanel(const SPanelContent& content, int texW = 768, int texH = 384,
+                   const SPalette& palette = defaultPalette());
 
 } // namespace hud

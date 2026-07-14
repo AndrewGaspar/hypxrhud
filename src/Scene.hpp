@@ -39,6 +39,11 @@ struct SPanel {
 
     int64_t  shownAtMs = 0; // envelope clock origin (renderer monotonic ms).
     uint64_t epoch     = 0; // content revision; XR side compares to detect a re-raster.
+
+    // WP-H5 queueing: a lower-urgency loser to a busy `on_refuse = queue` singleton slot is
+    // held pending (queued=true) — it occupies no head-space and is never submitted or
+    // expired; it is promoted (queued=false, envelope clock restarted) when the slot frees.
+    bool queued = false;
 };
 
 // A create-or-update request. id==0 allocates a new panel; a known id updates in place.
@@ -64,6 +69,14 @@ struct SDismissal {
     std::string reason;
 };
 
+// Per-slot occupancy snapshot for GetCapabilities introspection (WP-H5): how many panels a
+// slot currently holds active (visible / stacked) vs held-pending (queued).
+struct SSlotStat {
+    std::string name;
+    int         active = 0;
+    int         queued = 0;
+};
+
 class CScene {
   public:
     explicit CScene(int perClientCap = 4) : m_perClientCap(perClientCap) {}
@@ -78,16 +91,26 @@ class CScene {
     uint32_t upsert(const SUpsert& u, int64_t nowMs, std::vector<SDismissal>* dismissed = nullptr);
 
     // Remove a panel. reason is recorded for the caller (H3 signal). Returns false if
-    // the id is unknown.
-    bool dismiss(uint32_t id, const std::string& reason);
+    // the id is unknown. `nowMs` lets a freed singleton slot promote a queued panel (WP-H5);
+    // pass the render clock (0 = no reconcile, for pure remove in tests).
+    bool dismiss(uint32_t id, const std::string& reason, int64_t nowMs = 0);
 
     // Auto-dismiss every panel owned by `owner` (client-gone, WP-H3 NameOwnerChanged).
-    // Appends the removed ids to `dismissed` if provided.
-    void dropOwner(const std::string& owner, std::vector<SDismissal>* dismissed = nullptr);
+    // Appends the removed ids to `dismissed` if provided; `nowMs` drives queue promotion.
+    void dropOwner(const std::string& owner, std::vector<SDismissal>* dismissed = nullptr,
+                   int64_t nowMs = 0);
 
     // Drop panels whose envelope has fully faded (transient panels time out on their
-    // own). Appends removed ids with reason "expired". Call once per frame/tick.
+    // own). Appends removed ids with reason "expired". Call once per frame/tick. Queued
+    // panels never expire (their envelope clock has not started); a freed slot promotes one.
     void reapExpired(int64_t nowMs, std::vector<SDismissal>* dismissed = nullptr);
+
+    // Bump every panel's content epoch so the XR side re-rasters them all (WP-H6 theme
+    // reload: force-dirty so the new palette takes effect without a content change).
+    void forceRedrawAll();
+
+    // Per-slot occupancy for GetCapabilities (WP-H5), in slot-registry order.
+    std::vector<SSlotStat> slotStats() const;
 
     const std::map<uint32_t, SPanel>& panels() const { return m_panels; }
     const SPanel*                     get(uint32_t id) const;
@@ -111,6 +134,11 @@ class CScene {
     // pushed up. Panels beyond the slot's maxStack are not placed (they were evicted
     // at upsert time, but this is defensive).
     int stackIndex(const SPanel& p) const;
+
+    // Promote a held-pending (queued) panel into any singleton slot with no active occupant
+    // (WP-H5). Picks the highest-urgency, then oldest, queued member; restarts its envelope
+    // at nowMs and bumps its epoch so the XR side rasters it. Called after any removal.
+    void reconcileQueues(int64_t nowMs);
 
     CSlots                     m_slots;
     std::map<uint32_t, SPanel> m_panels;

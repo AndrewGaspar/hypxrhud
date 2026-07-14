@@ -86,7 +86,7 @@ void CDaemon::drainStdin(int64_t now) {
             continue;
         std::vector<SDismissal> d;
         if (msg.action == SWireMsg::EAction::Dismiss) {
-            if (m_scene.dismiss(msg.dismissId, "client"))
+            if (m_scene.dismiss(msg.dismissId, "client", now))
                 m_bus.emitDismissed({{msg.dismissId, "client"}});
         } else {
             m_scene.upsert(msg.upsert, now, &d);
@@ -95,11 +95,25 @@ void CDaemon::drainStdin(int64_t now) {
     }
 }
 
+void CDaemon::reloadPalette() {
+    std::vector<std::string> warns;
+    m_palette = resolvePalette(m_cfg.themeFollow, m_cfg.themeFile, m_cfg.colorOverrides, warns);
+    for (const auto& w : warns)
+        Log::log(Log::DEBUG, "[theme] {}", w);
+#ifdef HAVE_XR
+    m_session.setPalette(m_palette);
+#endif
+    // Force every panel to re-raster so the new colours take effect without a content change.
+    m_scene.forceRedrawAll();
+    Log::log(Log::INFO, "[theme] palette reloaded ({} panel(s) re-rastering)", m_scene.panels().size());
+}
+
 #ifdef HAVE_XR
 void CDaemon::tryBringUp(int64_t now) {
     CSession::EBringUp res = m_session.bringUp(m_egl, m_cfg, m_scene);
     if (res == CSession::EBringUp::Live) {
         m_attempt = 0;
+        m_session.setPalette(m_palette); // a fresh session starts on the default palette.
         m_bus.setRuntimeInfo(m_session.runtimeName(), m_session.maxLayerCount(), m_session.budget());
         setState(ERuntime::Live); // on reconnect the fresh session re-rasters every panel (memo §6.2).
         Log::log(Log::INFO, "[daemon] XR session live (runtime: {}, budget {}) — {} panel(s) pending",
@@ -147,6 +161,17 @@ int CDaemon::run() {
     }
 #endif
 
+    // Resolve the theming palette (WP-H6) once up-front so the first session bring-up renders
+    // in the right colours. Arm the Omarchy theme watch only when we can actually render.
+    {
+        std::vector<std::string> warns;
+        m_palette = resolvePalette(m_cfg.themeFollow, m_cfg.themeFile, m_cfg.colorOverrides, warns);
+        for (const auto& w : warns)
+            Log::log(Log::DEBUG, "[theme] {}", w);
+    }
+    if (m_xrEnabled && m_cfg.themeFollow)
+        m_themeWatchOk = m_themeWatch.init();
+
     // Initial state: connecting if we'll probe a runtime, else permanently absent.
     m_state = m_xrEnabled ? ERuntime::Connecting : ERuntime::Absent;
     m_bus.setRuntimeState(stateName(m_state));
@@ -159,9 +184,9 @@ int CDaemon::run() {
     while (true) {
         const int timeout = computeTimeoutMs();
 
-        // Fold the bus fd (+ optional stdin) into one poll(). sd-bus's own timer bounds the
-        // wait so its timeouts fire on schedule.
-        struct pollfd fds[2];
+        // Fold the bus fd (+ optional stdin + the theme-watch inotify fd) into one poll().
+        // sd-bus's own timer bounds the wait so its timeouts fire on schedule.
+        struct pollfd fds[3];
         int           nfds  = 0;
         const int     busFd = m_bus.fd();
         if (busFd >= 0) {
@@ -176,6 +201,13 @@ int CDaemon::run() {
             fds[nfds].revents = 0;
             nfds++;
         }
+        const int themeFd = m_themeWatchOk ? m_themeWatch.fd() : -1;
+        if (themeFd >= 0) {
+            fds[nfds].fd      = themeFd;
+            fds[nfds].events  = POLLIN;
+            fds[nfds].revents = 0;
+            nfds++;
+        }
         int busTimeout = m_bus.timeoutMs();
         int pollTo     = timeout;
         if (busTimeout >= 0)
@@ -183,6 +215,10 @@ int CDaemon::run() {
         poll(fds, nfds, pollTo);
 
         m_bus.process(); // drain method calls -> mutate the scene / emit signals.
+
+        // Omarchy theme switched? Re-resolve the palette + re-raster every panel (WP-H6).
+        if (m_themeWatchOk && m_themeWatch.drain())
+            reloadPalette();
 
         const int64_t now = nowMs();
         drainStdin(now);
@@ -226,6 +262,7 @@ int CDaemon::run() {
     }
 
     Log::log(Log::INFO, "[daemon] shutting down");
+    m_themeWatch.shutdown();
 #ifdef HAVE_XR
     m_session.teardown();
     if (m_eglOk)

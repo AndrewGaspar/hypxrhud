@@ -4,6 +4,8 @@
 #include "PngWrite.hpp"
 #include "Preview.hpp"
 #include "Scene.hpp"
+#include "SelfTest.hpp"
+#include "Theme.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -40,6 +42,8 @@ static void printUsage(const char* a0) {
                  "\nUsage: %s [options]   (D-Bus service; see README)\n"
                  "  --config <path>   Config file (default $XDG_CONFIG_HOME/hypxrhud/hypxrhud.toml)\n"
                  "  --preview <png>   Render the six-slot composite to a PNG and exit (no XR)\n"
+                 "  --theme <dir>     With --preview: render using this theme dir's palette (mako.ini)\n"
+                 "  --self-test       Health check on a PRIVATE bus (spawns the daemon, round-trips); exits 0/nonzero\n"
                  "  --gpu <path>      DRM render node (must match the runtime); overrides config\n"
                  "  --z <int>         Overlay sessionLayersPlacement (default 20); overrides config\n"
                  "  --stdin           Also read the interim NDJSON panel feed on stdin (debug)\n"
@@ -52,11 +56,13 @@ static void printUsage(const char* a0) {
 int main(int argc, char** argv) {
     std::string configPath = hud::defaultConfigPath();
     std::string previewOut;
+    std::string themeArg;
     std::string gpuOverride;
     bool        haveZ = false;
     int         zOverride = 0;
     bool        stdinFeed = false;
     bool        noXr      = false;
+    bool        selfTest  = false;
 
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -65,15 +71,21 @@ int main(int argc, char** argv) {
             return argv[++i];
         };
         if (a == "-h" || a == "--help") { printUsage(argv[0]); return kExitOk; }
-        else if (a == "--config")  configPath = need("--config");
-        else if (a == "--preview") previewOut = need("--preview");
-        else if (a == "--gpu")     gpuOverride = need("--gpu");
-        else if (a == "--z")       { zOverride = std::atoi(need("--z")); haveZ = true; }
-        else if (a == "--stdin")   stdinFeed = true;
-        else if (a == "--no-xr")   noXr = true;
-        else if (a == "--verbose") Log::setLevel(Log::DEBUG);
+        else if (a == "--config")   configPath = need("--config");
+        else if (a == "--preview")  previewOut = need("--preview");
+        else if (a == "--theme")    themeArg = need("--theme");
+        else if (a == "--self-test") selfTest = true;
+        else if (a == "--gpu")      gpuOverride = need("--gpu");
+        else if (a == "--z")        { zOverride = std::atoi(need("--z")); haveZ = true; }
+        else if (a == "--stdin")    stdinFeed = true;
+        else if (a == "--no-xr")    noXr = true;
+        else if (a == "--verbose")  Log::setLevel(Log::DEBUG);
         else { Log::log(Log::ERR, "unknown option: {}", a); printUsage(argv[0]); return kExitUsage; }
     }
+
+    // ---- self-test (WP-H7): private-bus health check, no XR, no real session bus ----
+    if (selfTest)
+        return hud::runSelfTest();
 
     // ---- config ----
     hud::SConfig             cfg;
@@ -98,12 +110,23 @@ int main(int argc, char** argv) {
                           std::chrono::steady_clock::now().time_since_epoch())
                           .count();
         hud::buildPreviewScene(scene, now);
-        hud::SImage composite = hud::renderPreview(scene, 1600, 1000, cfg.texW, cfg.texH);
+
+        // Resolve the theming palette. --theme <dir> forces that theme's mako.ini; otherwise
+        // follow the config (which by default follows the Omarchy current theme).
+        const bool  follow   = themeArg.empty() ? cfg.themeFollow : true;
+        std::string themeFile = themeArg.empty() ? cfg.themeFile : (themeArg + "/mako.ini");
+        std::vector<std::string> pwarns;
+        hud::SPalette palette = hud::resolvePalette(follow, themeFile, cfg.colorOverrides, pwarns);
+        for (const auto& w : pwarns)
+            Log::log(Log::DEBUG, "theme: {}", w);
+
+        hud::SImage composite = hud::renderPreview(scene, 1600, 1000, cfg.texW, cfg.texH, palette);
         if (!hud::Png::write(composite, previewOut)) {
             Log::log(Log::ERR, "failed to write preview PNG: {}", previewOut);
             return kExitUsage;
         }
-        Log::log(Log::INFO, "wrote six-slot preview: {} ({} panels)", previewOut, scene.panels().size());
+        Log::log(Log::INFO, "wrote six-slot preview: {} ({} panels{})", previewOut,
+                 scene.panels().size(), themeArg.empty() ? "" : ", themed");
         return kExitOk;
     }
 

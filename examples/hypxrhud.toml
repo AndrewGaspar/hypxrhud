@@ -41,6 +41,28 @@ fade_ms = 450
 reprobe_base_ms = 2000
 reprobe_cap_ms  = 30000
 
+# ---- theming (WP-H6) ----------------------------------------------------------------
+# The panel palette follows the Omarchy CURRENT theme by default: it reads the theme's
+# mako.ini (text-color -> foreground, border-color -> accent, background-color -> panel
+# fill) and derives the muted hint text + bar tracks. A theme switch (omarchy-theme-set)
+# is picked up LIVE via an inotify watch on ~/.config/omarchy/current/theme — no restart.
+# When no Omarchy theme is present the built-in palette is used.
+#
+# [theme]
+# follow = true              # follow the Omarchy current theme (default true; false = built-in)
+# file   = ""                # override which palette file is read (empty = the theme's mako.ini)
+# # Per-role hex overrides win over the theme. mako.ini does NOT carry status colours, so
+# # good/warn/bad keep tuned defaults — override them here if your theme needs different ones
+# # (especially on a light theme, where the default pastels can be low-contrast).
+# normal    = "#ebeef2"
+# dim       = "#969ea8"
+# accent    = "#78beff"
+# good      = "#78dc96"
+# warn      = "#fac86e"
+# bad       = "#ff7878"
+# panel_bg  = "#0d0f14"
+# bar_track = "#40454d"
+
 # ---- per-slot overrides -------------------------------------------------------------
 # The six slots and their default VIEW-space poses (metres, -z forward). Uncomment and
 # edit to re-pose any slot; `pose` is "x,y,z", `size` is the quad width in metres,
@@ -54,10 +76,14 @@ reprobe_cap_ms  = 30000
 # pose = "0,-0.14,-1.0"
 # size = 0.42
 
+# [slot.voice]           # e.g. hold a busy voice slot for a queued lower-urgency panel
+# on_refuse = "queue"    # refuse (default) | queue — a lower-urgency loser is held pending
+#                        #   and promoted into the slot when the current occupant leaves.
+
 # [slot.toast]           # top-centre — notification mirror (bounded stack)
 # pose = "0,0.30,-1.1"
 # size = 0.40
-# max  = 3
+# max  = 3               # per-slot stack depth (WP-H5): newest at the base, oldest evicted
 
 # [slot.status]          # bottom-right — pinned status badge
 # pose = "0.55,-0.20,-1.2"

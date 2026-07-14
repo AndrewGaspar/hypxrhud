@@ -49,6 +49,16 @@ namespace {
     bool parseVec3(const std::string& s, float& x, float& y, float& z) {
         return std::sscanf(s.c_str(), "%f,%f,%f", &x, &y, &z) == 3;
     }
+    bool asBool(const std::string& v, bool& out) {
+        if (v == "true" || v == "1" || v == "yes" || v == "on")   { out = true;  return true; }
+        if (v == "false" || v == "0" || v == "no" || v == "off")  { out = false; return true; }
+        return false;
+    }
+    // The theme-override role keys accepted under [theme] (per-role hex colours, WP-H6).
+    bool isThemeRole(const std::string& k) {
+        return k == "normal" || k == "dim" || k == "accent" || k == "good" || k == "warn" ||
+               k == "bad" || k == "panel_bg" || k == "bar_track";
+    }
 }
 
 void SConfig::applySlots(CSlots& registry) const {
@@ -60,6 +70,7 @@ void SConfig::applySlots(CSlots& registry) const {
         if (ov.hasSize)  s->sizeW = ov.sizeW;
         if (ov.hasSpace) s->space = ov.space;
         if (ov.hasMax)   s->maxStack = ov.max;
+        if (ov.hasRefuse) s->onRefuse = ov.refuseQueue ? ERefusePolicy::Queue : ERefusePolicy::Refuse;
     }
 }
 
@@ -125,6 +136,21 @@ bool parseConfig(const std::string& text, SConfig& out, std::vector<std::string>
             else if (key == "reprobe_base_ms") setInt(out.reprobeBaseMs, val);
             else if (key == "reprobe_cap_ms")  setInt(out.reprobeCapMs, val);
             else warn("unknown key 'hud." + key + "' (ignored)");
+        } else if (section == "theme") {
+            if (key == "follow") {
+                // Accept a bare or quoted boolean: follow = true  /  follow = "false".
+                std::string v = val;
+                asString(val, v); // strip quotes if present (leaves v unchanged otherwise).
+                if (!asBool(v, out.themeFollow))
+                    err("theme.follow must be true|false");
+            } else if (key == "file") {
+                setStr(out.themeFile, val);
+            } else if (isThemeRole(key)) {
+                std::string v;
+                if (setStr(v, val)) out.colorOverrides[key] = v; // hex validated at resolve time.
+            } else {
+                warn("unknown key 'theme." + key + "' (ignored)");
+            }
         } else if (section.rfind("slot.", 0) == 0) {
             std::string name = section.substr(5);
             auto&       ov   = out.slots[name];
@@ -139,6 +165,12 @@ bool parseConfig(const std::string& text, SConfig& out, std::vector<std::string>
                 if (setStr(ov.space, val)) ov.hasSpace = true;
             } else if (key == "max") {
                 if (setInt(ov.max, val)) ov.hasMax = true;
+            } else if (key == "on_refuse") {
+                std::string v;
+                if (!setStr(v, val)) continue;
+                if (v == "queue")       { ov.hasRefuse = true; ov.refuseQueue = true; }
+                else if (v == "refuse") { ov.hasRefuse = true; ov.refuseQueue = false; }
+                else err("slot on_refuse must be refuse|queue");
             } else if (key == "opacity") {
                 if (setFloat(ov.opacity, val)) ov.hasOpacity = true;
             } else {

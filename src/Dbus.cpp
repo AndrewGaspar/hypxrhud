@@ -376,7 +376,7 @@ int CBus::onDismissPanel(sd_bus_message* m, void* userdata, sd_bus_error* err) {
         sd_bus_error_set(err, "io.github.andrewgaspar.hypxrhud1.Error.NotOwner", "panel is owned by another client");
         return -EPERM;
     }
-    self->m_scene->dismiss(id, "client");
+    self->m_scene->dismiss(id, "client", nowMs()); // nowMs promotes any queued panel (WP-H5).
     self->emitOne(id, "client");
     sd_bus_reply_method_return(m, "");
     return 1;
@@ -401,6 +401,17 @@ int CBus::onGetCapabilities(sd_bus_message* m, void* userdata, sd_bus_error* /*e
     sd_bus_message_open_container(reply, 'a', "s");
     for (const auto& s : self->m_scene->slots().all())
         sd_bus_message_append(reply, "s", s.name.c_str());
+    sd_bus_message_close_container(reply);
+    sd_bus_message_close_container(reply);
+    sd_bus_message_close_container(reply);
+
+    // slotOccupancy (a(suu)) — per-slot (name, activeCount, queuedCount) introspection (WP-H5).
+    sd_bus_message_open_container(reply, 'e', "sv");
+    sd_bus_message_append(reply, "s", "slotOccupancy");
+    sd_bus_message_open_container(reply, 'v', "a(suu)");
+    sd_bus_message_open_container(reply, 'a', "(suu)");
+    for (const auto& st : self->m_scene->slotStats())
+        sd_bus_message_append(reply, "(suu)", st.name.c_str(), (uint32_t)st.active, (uint32_t)st.queued);
     sd_bus_message_close_container(reply);
     sd_bus_message_close_container(reply);
     sd_bus_message_close_container(reply);
@@ -466,7 +477,7 @@ int CBus::onNameOwnerChanged(sd_bus_message* m, void* userdata, sd_bus_error*) {
         return 0;
 
     std::vector<SDismissal> dismissed;
-    self->m_scene->dropOwner(name, &dismissed);
+    self->m_scene->dropOwner(name, &dismissed, nowMs());
     Log::log(Log::INFO, "[dbus] client {} gone — auto-dismissed {} panel(s)", name, dismissed.size());
     self->emitDismissed(dismissed);
     return 0;

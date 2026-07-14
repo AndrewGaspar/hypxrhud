@@ -308,7 +308,7 @@ bool CSession::renderFrame(int64_t now) {
                 continue;
             // Upload-on-change: re-raster + upload ONLY when the content epoch moved.
             if (g->uploadedEpoch != p->epoch) {
-                SImage img = renderPanel(p->content, m_cfg.texW, m_cfg.texH);
+                SImage img = renderPanel(p->content, m_cfg.texW, m_cfg.texH, m_palette);
                 if (!img.empty())
                     uploadPanel(*g, img.rgba.data());
                 g->uploadedEpoch = p->epoch;
