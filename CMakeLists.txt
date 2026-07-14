@@ -81,6 +81,32 @@ endif()
 
 install(TARGETS hypxrhud RUNTIME DESTINATION bin)
 
+# ---- hypxrhud-battery: the first-party battery client -------------------------------
+# A small standalone sd-bus client that feeds the `battery` slot with TWO gauges — the
+# WiVRn headset battery and the UPower laptop battery. The PURE parts (value/diff/latch
+# model + TOML config) go in hypxrhud_battery_core (no sd-bus) so they unit-test with the
+# rest; the thin bus adapters (sources + panel client) live in the executable.
+add_library(hypxrhud_battery_core STATIC
+    src/battery/BatteryModel.cpp
+    src/battery/BatteryConfig.cpp
+)
+target_link_libraries(hypxrhud_battery_core PUBLIC hypxrhud_core)
+target_compile_options(hypxrhud_battery_core PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+
+add_executable(hypxrhud-battery
+    src/battery/main.cpp
+    src/battery/BatterySources.cpp
+    src/battery/BatteryClient.cpp
+)
+target_link_libraries(hypxrhud-battery PRIVATE hypxrhud_battery_core PkgConfig::libsystemd)
+target_compile_options(hypxrhud-battery PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+install(TARGETS hypxrhud-battery RUNTIME DESTINATION bin)
+
+# The battery client's systemd user unit (a plain client, enabled at login — no D-Bus
+# activation of its own; its first CreatePanel bus-activates the hud daemon).
+install(FILES systemd/hypxrhud-battery.service
+        DESTINATION lib/systemd/user)
+
 # ---- D-Bus service activation (WP-H3) ----
 # Bus-activated on the first CreatePanel/GetCapabilities; the SystemdService= hands off to
 # the user unit. See systemd/hypxrhud.service + dbus/*.service.
@@ -109,9 +135,10 @@ add_executable(hypxrhud_tests
     tests/test_backoff.cpp   # WP-H4: re-probe backoff schedule
     tests/test_theme.cpp     # WP-H6: palette parser + resolution (fixtures)
     tests/test_arbiter.cpp   # WP-H5: slot queueing + occupancy introspection
+    tests/test_battery.cpp   # battery client: model/diff/latch + config
 )
 target_include_directories(hypxrhud_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
-target_link_libraries(hypxrhud_tests PRIVATE hypxrhud_core)
+target_link_libraries(hypxrhud_tests PRIVATE hypxrhud_core hypxrhud_battery_core)
 target_compile_options(hypxrhud_tests PRIVATE -Wall -Wextra)
 add_test(NAME hypxrhud_tests COMMAND hypxrhud_tests)
 
@@ -137,4 +164,26 @@ else()
     add_test(NAME hypxrhud_dbus_tests
              COMMAND ${CMAKE_COMMAND} -E echo "SKIP: dbus-run-session not found; D-Bus integration test skipped")
     message(STATUS "hypxrhud: dbus-run-session not found — integration test will report SKIP")
+endif()
+
+# ---- battery client D-Bus integration test ------------------------------------------
+# Drives the REAL CBatteryClient against a private-bus hypxrhud --no-xr daemon with
+# synthetic gauges (no dependency on live UPower/WiVRn). Same dbus-run-session wrapper.
+add_executable(hypxrhud_battery_dbus_tests
+    tests/battery_integration.cpp
+    src/battery/BatteryClient.cpp)
+target_include_directories(hypxrhud_battery_dbus_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(hypxrhud_battery_dbus_tests PRIVATE hypxrhud_core PkgConfig::libsystemd)
+target_compile_options(hypxrhud_battery_dbus_tests PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+
+if(DBUS_RUN_SESSION)
+    add_test(NAME hypxrhud_battery_dbus_tests
+             COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:hypxrhud_battery_dbus_tests>)
+    set_tests_properties(hypxrhud_battery_dbus_tests PROPERTIES
+        ENVIRONMENT "HYPXRHUD_BIN=$<TARGET_FILE:hypxrhud>;HYPXRHUD_DBUS_TEST_OK=1"
+        TIMEOUT 60)
+else()
+    add_test(NAME hypxrhud_battery_dbus_tests
+             COMMAND ${CMAKE_COMMAND} -E echo "SKIP: dbus-run-session not found; battery integration test skipped")
 endif()
