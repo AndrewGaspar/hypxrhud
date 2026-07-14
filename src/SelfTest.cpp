@@ -227,6 +227,11 @@ int runSelfTest() {
             return 1;
         }
         setenv("HYPXRHUD_SELFTEST_BUS", "1", 1);
+        // Blind the private bus to INSTALLED activation files: with XDG_DATA_DIRS at its
+        // default (or unset -> /usr/local/share:/usr/share), the private dbus-daemon would
+        // bus-activate the system hypxrhud, which races this self-test's own daemon for the
+        // name (observed as a hang + stray daemons on dead buses).
+        setenv("XDG_DATA_DIRS", "/nonexistent-hypxrhud-selftest", 1);
         const char* argv[] = {"dbus-run-session", "--", self.c_str(), "--self-test", nullptr};
         execvp("dbus-run-session", const_cast<char* const*>(argv));
         std::fprintf(stderr, "self-test: dbus-run-session not found (%s); cannot create a private bus\n",
