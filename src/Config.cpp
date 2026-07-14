@@ -122,6 +122,8 @@ bool parseConfig(const std::string& text, SConfig& out, std::vector<std::string>
             else if (key == "rise_ms")        setInt(out.riseMs, val);
             else if (key == "hold_ms")        setInt(out.holdMs, val);
             else if (key == "fade_ms")        setInt(out.fadeMs, val);
+            else if (key == "reprobe_base_ms") setInt(out.reprobeBaseMs, val);
+            else if (key == "reprobe_cap_ms")  setInt(out.reprobeCapMs, val);
             else warn("unknown key 'hud." + key + "' (ignored)");
         } else if (section.rfind("slot.", 0) == 0) {
             std::string name = section.substr(5);

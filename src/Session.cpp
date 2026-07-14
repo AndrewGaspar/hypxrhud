@@ -3,16 +3,8 @@
 #include "Egl.hpp"
 #include "Log.hpp"
 #include "PanelText.hpp"
-#include "Wire.hpp"
 
-#include <atomic>
-#include <chrono>
 #include <cstring>
-#include <fcntl.h>
-#include <thread>
-#include <unistd.h>
-
-extern std::atomic<bool> g_stopRequested;
 
 namespace hud {
 
@@ -26,17 +18,12 @@ namespace hud {
     } while (0)
 
 namespace {
-    int64_t nowMs() {
-        return std::chrono::duration_cast<std::chrono::milliseconds>(
-                   std::chrono::steady_clock::now().time_since_epoch())
-            .count();
-    }
     constexpr int64_t kSRGBA = 0x8C43; // GL_SRGB8_ALPHA8
     constexpr int64_t kRGBA8 = 0x8058; // GL_RGBA8
 }
 
 CSession::~CSession() {
-    destroy();
+    teardown();
 }
 
 bool CSession::createInstance() {
@@ -86,10 +73,16 @@ bool CSession::createInstance() {
     return true;
 }
 
-bool CSession::getSystem() {
+XrResult CSession::getSystem() {
     XrSystemGetInfo si = {XR_TYPE_SYSTEM_GET_INFO};
     si.formFactor      = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
-    XR_CHK(xrGetSystem(m_instance, &si, &m_systemId));
+    XrResult r         = xrGetSystem(m_instance, &si, &m_systemId);
+    if (XR_FAILED(r)) {
+        // XR_ERROR_FORM_FACTOR_UNAVAILABLE = runtime up, headset undonned (memo §6.1) —
+        // the caller polls at the gentle fixed cadence rather than growing the backoff.
+        Log::log(Log::DEBUG, "[xr] xrGetSystem failed: {}", (int)r);
+        return r;
+    }
 
     // Layer budget (design memo §1.1): query maxLayerCount and log the effective cap.
     XrSystemProperties props = {XR_TYPE_SYSTEM_PROPERTIES};
@@ -100,7 +93,7 @@ bool CSession::getSystem() {
         m_maxLayers = 0;
         Log::log(Log::WARN, "[xr] xrGetSystemProperties failed; assuming spec-minimum layer budget {}", budget());
     }
-    return true;
+    return XR_SUCCESS;
 }
 
 bool CSession::createSession(CEgl& egl) {
@@ -196,7 +189,7 @@ CSession::SGpuPanel* CSession::ensureGpu(uint32_t id) {
 
 void CSession::reconcileGpu() {
     for (auto it = m_gpu.begin(); it != m_gpu.end();) {
-        if (!m_scene.get(it->first)) {
+        if (!m_scene->get(it->first)) {
             if (it->second.swapchain != XR_NULL_HANDLE)
                 xrDestroySwapchain(it->second.swapchain);
             it = m_gpu.erase(it);
@@ -235,32 +228,6 @@ void CSession::uploadPanel(SGpuPanel& g, const uint8_t* rgba) {
     xrReleaseSwapchainImage(g.swapchain, &rel);
 }
 
-bool CSession::readStdin() {
-    if (m_stdinEof)
-        return true; // feed already closed; keep re-presenting the last scene.
-    char    buf[4096];
-    ssize_t r;
-    while ((r = read(STDIN_FILENO, buf, sizeof(buf))) > 0)
-        m_stdinBuf.append(buf, (size_t)r);
-    if (r == 0)
-        m_stdinEof = true;
-    // r < 0: EAGAIN (nonblocking) is normal.
-
-    size_t pos;
-    while ((pos = m_stdinBuf.find('\n')) != std::string::npos) {
-        std::string line = m_stdinBuf.substr(0, pos);
-        m_stdinBuf.erase(0, pos + 1);
-        SWireMsg msg;
-        if (!Wire::parse(line, msg))
-            continue;
-        if (msg.action == SWireMsg::EAction::Dismiss)
-            m_scene.dismiss(msg.dismissId, "client");
-        else
-            m_scene.upsert(msg.upsert, nowMs());
-    }
-    return true;
-}
-
 void CSession::pollEvents() {
     XrEventDataBuffer ev = {XR_TYPE_EVENT_DATA_BUFFER};
     XrResult          r;
@@ -284,17 +251,20 @@ void CSession::pollEvents() {
                     break;
                 case XR_SESSION_STATE_EXITING:
                 case XR_SESSION_STATE_LOSS_PENDING:
-                    m_exit = true; // WP-H4 turns this into teardown + probe/backoff (persist).
+                    // WP-H4: NOT a process exit — the daemon tears down + re-enters
+                    // probe/backoff, keeping the panel table. A requested clean shutdown
+                    // (SIGTERM -> requestExit) also lands here; the daemon distinguishes.
+                    m_lost = true;
                     break;
                 default: break;
             }
         } else if (ev.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) {
-            m_exit = true;
+            m_lost = true;
         }
         ev = {XR_TYPE_EVENT_DATA_BUFFER};
     }
     if (r == XR_ERROR_INSTANCE_LOST || r == XR_ERROR_SESSION_LOST)
-        m_exit = true;
+        m_lost = true;
 }
 
 XrEnvironmentBlendMode CSession::blendMode() const {
@@ -304,15 +274,18 @@ XrEnvironmentBlendMode CSession::blendMode() const {
 }
 
 bool CSession::renderFrame(int64_t now) {
+    if (!m_sessionRunning || m_session == XR_NULL_HANDLE)
+        return false;
+
     XrFrameWaitInfo wi = {XR_TYPE_FRAME_WAIT_INFO};
     XrFrameState    fs = {XR_TYPE_FRAME_STATE};
     XrResult        rw = xrWaitFrame(m_session, &wi, &fs);
-    if (rw == XR_ERROR_SESSION_LOST || rw == XR_ERROR_INSTANCE_LOST) { m_exit = true; return false; }
+    if (rw == XR_ERROR_SESSION_LOST || rw == XR_ERROR_INSTANCE_LOST) { m_lost = true; return false; }
     if (XR_FAILED(rw)) return false;
 
     XrFrameBeginInfo bi = {XR_TYPE_FRAME_BEGIN_INFO};
     XrResult         rb = xrBeginFrame(m_session, &bi);
-    if (rb == XR_ERROR_SESSION_LOST || rb == XR_ERROR_INSTANCE_LOST) { m_exit = true; return false; }
+    if (rb == XR_ERROR_SESSION_LOST || rb == XR_ERROR_INSTANCE_LOST) { m_lost = true; return false; }
 
     reconcileGpu();
 
@@ -326,8 +299,8 @@ bool CSession::renderFrame(int64_t now) {
     layers.reserve(cap);
 
     if (fs.shouldRender) {
-        for (uint32_t id : m_scene.submitOrder(now, cap)) {
-            const SPanel* p = m_scene.get(id);
+        for (uint32_t id : m_scene->submitOrder(now, cap)) {
+            const SPanel* p = m_scene->get(id);
             if (!p)
                 continue;
             SGpuPanel* g = ensureGpu(id);
@@ -341,8 +314,8 @@ bool CSession::renderFrame(int64_t now) {
                 g->uploadedEpoch = p->epoch;
             }
 
-            const float alpha = m_scene.alphaOf(*p, now);
-            SPlacement  place = m_scene.placementOf(*p);
+            const float alpha = m_scene->alphaOf(*p, now);
+            SPlacement  place = m_scene->placementOf(*p);
             XrSpace     space = (place.space == "local" && m_localSpace != XR_NULL_HANDLE)
                                     ? m_localSpace
                                     : m_viewSpace;
@@ -377,72 +350,61 @@ bool CSession::renderFrame(int64_t now) {
     ei.layerCount           = (uint32_t)layers.size();
     ei.layers               = layers.data();
     XrResult re             = xrEndFrame(m_session, &ei);
-    if (re == XR_ERROR_SESSION_LOST || re == XR_ERROR_INSTANCE_LOST) { m_exit = true; return false; }
+    if (re == XR_ERROR_SESSION_LOST || re == XR_ERROR_INSTANCE_LOST) { m_lost = true; return false; }
     return true;
 }
 
-bool CSession::init(CEgl& egl, const SConfig& cfg) {
-    m_egl = &egl;
-    m_cfg = cfg;
-    m_scene = CScene(cfg.perClientCap);
-    cfg.applySlots(m_scene.slots());
+CSession::EBringUp CSession::bringUp(CEgl& egl, const SConfig& cfg, CScene& scene) {
+    m_egl            = &egl;
+    m_cfg            = cfg;
+    m_scene          = &scene;
+    m_lost           = false;
+    m_sessionRunning = false;
+    m_state          = XR_SESSION_STATE_UNKNOWN;
 
-    // Non-blocking stdin so the frame loop is never stalled waiting for content.
-    int fl = fcntl(STDIN_FILENO, F_GETFL, 0);
-    if (fl >= 0)
-        fcntl(STDIN_FILENO, F_SETFL, fl | O_NONBLOCK);
-
-    if (!createInstance())
-        return false;
-    if (!getSystem())
-        return false;
-    egl.makeCurrent(); // held current for the whole session (fence contract).
-    if (!createSession(egl))
-        return false;
-    if (!chooseSwapchainFormat())
-        return false;
-    return true;
-}
-
-void CSession::run() {
-    Log::log(Log::INFO, "[xr] entering frame loop");
-    while (!m_exit) {
-        pollEvents();
-        if (m_exit)
-            break;
-
-        if (g_stopRequested.load() && !m_exitRequested) {
-            if (m_session != XR_NULL_HANDLE && m_sessionRunning)
-                xrRequestExitSession(m_session);
-            else
-                m_exit = true;
-            m_exitRequested = true;
-        }
-
-        int64_t now = nowMs();
-        readStdin();          // interim NDJSON feed -> scene (WP-H3 replaces this).
-        m_scene.reapExpired(now);
-
-        if (!m_sessionRunning) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            continue;
-        }
-        renderFrame(now); // xrWaitFrame paces us.
+    if (!createInstance()) {
+        teardown();
+        return EBringUp::NoRuntime;
     }
-    Log::log(Log::INFO, "[xr] frame loop exited");
+    XrResult sysr = getSystem();
+    if (sysr == XR_ERROR_FORM_FACTOR_UNAVAILABLE) {
+        teardown();
+        return EBringUp::NoHeadset; // runtime up, headset undonned — gentle fixed cadence.
+    }
+    if (XR_FAILED(sysr)) {
+        teardown();
+        return EBringUp::NoRuntime;
+    }
+    egl.makeCurrent(); // held current for the whole session (fence contract, 95c541a8).
+    if (!createSession(egl)) {
+        teardown();
+        return EBringUp::NoRuntime;
+    }
+    if (!chooseSwapchainFormat()) {
+        teardown();
+        return EBringUp::NoRuntime;
+    }
+    return EBringUp::Live;
 }
 
-void CSession::destroy() {
+void CSession::requestExit() {
+    if (m_session != XR_NULL_HANDLE && m_sessionRunning)
+        xrRequestExitSession(m_session);
+}
+
+void CSession::teardown() {
     for (auto& [id, g] : m_gpu)
         if (g.swapchain != XR_NULL_HANDLE)
             xrDestroySwapchain(g.swapchain);
-    m_gpu.clear();
+    m_gpu.clear(); // a fresh session re-rasters every panel on reconnect (memo §6.2 force-dirty).
     if (m_localSpace != XR_NULL_HANDLE) { xrDestroySpace(m_localSpace); m_localSpace = XR_NULL_HANDLE; }
     if (m_viewSpace != XR_NULL_HANDLE) { xrDestroySpace(m_viewSpace); m_viewSpace = XR_NULL_HANDLE; }
     if (m_session != XR_NULL_HANDLE) { xrDestroySession(m_session); m_session = XR_NULL_HANDLE; }
-    if (m_egl)
-        m_egl->release();
+    // NOTE: the EGL context is owned by CDaemon and kept current across reconnects — NOT
+    // released here.
     if (m_instance != XR_NULL_HANDLE) { xrDestroyInstance(m_instance); m_instance = XR_NULL_HANDLE; }
+    m_sessionRunning = false;
+    m_state          = XR_SESSION_STATE_UNKNOWN;
 }
 
 } // namespace hud

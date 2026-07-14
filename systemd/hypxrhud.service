@@ -1,20 +1,28 @@
-# hypxrhud — shared XR HUD daemon (systemd user service).
+# hypxrhud — shared XR HUD daemon (systemd user service, D-Bus activated).
 #
-# Install:
-#   mkdir -p ~/.config/systemd/user
+# Install (packaged): CMake installs this to <prefix>/lib/systemd/user/ and the D-Bus
+# service file to <prefix>/share/dbus-1/services/. For a manual/dev install:
+#   mkdir -p ~/.config/systemd/user ~/.local/share/dbus-1/services
 #   cp systemd/hypxrhud.service ~/.config/systemd/user/
+#   sed "s|/usr/bin/hypxrhud|$HOME/.local/bin/hypxrhud|" \
+#       dbus/io.github.andrewgaspar.hypxrhud.service > \
+#       ~/.local/share/dbus-1/services/io.github.andrewgaspar.hypxrhud.service
 #   systemctl --user daemon-reload
-#   systemctl --user enable --now hypxrhud.service
 #
-# The unit needs the session's XR environment (the same variables HypXRland/hypxrpaper
-# use). If your session does not import them into the systemd user environment, add to
-# your Hyprland config:
-#   exec-once = systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR XR_RUNTIME_JSON
+# ACTIVATION: with the D-Bus service file present, the daemon is BUS-ACTIVATED on the first
+# CreatePanel/GetCapabilities call (SystemdService= hands off to this unit) — a session that
+# never shows a HUD pays nothing. `Type=dbus` + `BusName=` let systemd track readiness by
+# name acquisition. You can also `systemctl --user enable --now hypxrhud.service` to start
+# it eagerly at login.
 #
-# NOTE (WP-H1/H2): the daemon currently takes its panel feed on stdin (interim NDJSON),
-# so this Type=simple unit is a placeholder. WP-H3 turns hypxrhud into a D-Bus service
-# (Type=dbus, BusName=io.github.andrewgaspar.hypxrhud, bus-activated) and ships a
-# matching /usr/share/dbus-1/services/*.service — see README "What lands in H3/H4".
+# The unit needs the session's XR environment (the same variables HypXRland/hypxrpaper use).
+# If your session does not import them into the systemd user environment, add to your
+# Hyprland config:
+#   exec-once = systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR XR_RUNTIME_JSON DBUS_SESSION_BUS_ADDRESS
+#
+# The daemon is PERSISTENT (WP-H4): it owns the bus and accepts panels even with no XR
+# runtime present, probing on a backoff and rendering once the runtime/headset appear, and
+# surviving a WiVRn disconnect. So it need not be ordered after the runtime.
 
 [Unit]
 Description=hypxrhud — shared XR HUD daemon for HypXRland
@@ -22,8 +30,9 @@ After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
-Type=simple
-ExecStart=%h/.local/bin/hypxrhud
+Type=dbus
+BusName=io.github.andrewgaspar.hypxrhud
+ExecStart=/usr/bin/hypxrhud
 Restart=on-failure
 RestartSec=2
 

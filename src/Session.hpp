@@ -33,10 +33,11 @@
 // swapchains, uploading a panel ONLY when its content epoch changes (the upload-once
 // idle-monitor trick — a static panel re-submits its swapchain for free, no re-raster).
 //
-// SEAMS for later WPs: the interim stdin NDJSON feed (readStdin) is what WP-H3 replaces
-// with an sd-bus fd folded into the same poll loop; the run loop's runtime-loss handling
-// currently exits (like the wp-v5 subprocess), which WP-H4 turns into probe/backoff so
-// the daemon SURVIVES a WiVRn disconnect.
+// WP-H4: the scene is owned by CDaemon (it SURVIVES a session teardown/rebuild); this
+// class holds only a pointer and MIRRORS the scene into GPU swapchains. Runtime loss no
+// longer exits the process — bringUp/teardown + the daemon's probe/backoff let the daemon
+// survive a WiVRn disconnect. `bringUp` distinguishes "no runtime" (grow the backoff) from
+// "runtime up, headset undonned" (gentle fixed cadence), matching the compositor (§6.1).
 
 namespace hud {
 
@@ -47,18 +48,40 @@ class CSession {
     CSession() = default;
     ~CSession();
 
-    // Bring up instance/system/session/swapchain-format. Returns false when no XR
-    // runtime is available (the caller degrades — main exits kExitNoRuntime).
-    bool init(CEgl& egl, const SConfig& cfg);
+    // Result of a bring-up attempt (drives the daemon's backoff cadence, memo §6.1).
+    enum class EBringUp {
+        Live,      // instance+system+session up; render away.
+        NoHeadset, // runtime present but XR_ERROR_FORM_FACTOR_UNAVAILABLE (headset undonned).
+        NoRuntime, // no runtime / missing extensions / session-create failure.
+    };
 
-    // Drive the frame loop until a clean exit (SIGTERM/SIGINT or session EXITING).
-    // Reads the interim stdin NDJSON feed each tick and mirrors the scene to GPU.
-    void run();
+    // Bring up instance/system/session/swapchain-format against `scene` (owned by the
+    // caller). Cleans up any partial state on a non-Live result. Idempotent: safe to call
+    // again after teardown() to reconnect. A fresh session starts with empty GPU state, so
+    // every live panel re-rasters on reconnect (the force-dirty of memo §6.2, for free).
+    EBringUp bringUp(CEgl& egl, const SConfig& cfg, CScene& scene);
 
-    void destroy();
+    // Destroy the XR handles (instance/session/swapchains/spaces) but NOT the EGL context —
+    // the daemon keeps EGL current across reconnects. Safe to call repeatedly.
+    void teardown();
 
-    CScene&       scene() { return m_scene; }
-    const CScene& scene() const { return m_scene; }
+    // Pump XR events (session state machine). On any loss/exit event sets lost() so the
+    // daemon tears down and re-enters probe/backoff instead of exiting.
+    void pollEvents();
+
+    // Submit one frame (one quad per visible panel). xrWaitFrame paces the caller. Returns
+    // false if nothing was submitted (session not running / loss); sets lost() on loss.
+    bool renderFrame(int64_t nowMs);
+
+    // Ask the runtime to end the session cleanly (SIGTERM path). The subsequent EXITING
+    // event sets lost(); the daemon distinguishes a requested exit from a surprise loss.
+    void requestExit();
+
+    bool          lost() const { return m_lost; }
+    bool          sessionRunning() const { return m_sessionRunning; }
+    CScene&       scene() { return *m_scene; }
+    const CScene& scene() const { return *m_scene; }
+    const std::string& runtimeName() const { return m_runtimeName; }
     int64_t       maxLayerCount() const { return m_maxLayers; }
     int           budget() const { return layerBudget(m_maxLayers); }
 
@@ -70,24 +93,20 @@ class CSession {
         uint64_t              uploadedEpoch = 0;  // last content epoch uploaded (0 = never).
     };
 
-    bool createInstance();
-    bool getSystem();
-    bool createSession(CEgl& egl);
-    bool chooseSwapchainFormat();
+    bool     createInstance();
+    XrResult getSystem();                          // returns xrGetSystem's result (for NoHeadset).
+    bool     createSession(CEgl& egl);
+    bool     chooseSwapchainFormat();
 
     SGpuPanel* ensureGpu(uint32_t id);            // create-on-demand swapchain for a panel.
     void       reconcileGpu();                    // destroy swapchains for vanished panels.
     void       uploadPanel(SGpuPanel& g, const uint8_t* rgba);
 
-    void pollEvents();
-    bool renderFrame(int64_t nowMs);
-    bool readStdin();                             // drain stdin -> Wire -> m_scene; false on EOF.
-
     XrEnvironmentBlendMode blendMode() const;
 
     CEgl*   m_egl = nullptr;
     SConfig m_cfg;
-    CScene  m_scene{4};
+    CScene* m_scene = nullptr;                     // owned by CDaemon; survives teardown.
 
     XrInstance m_instance  = XR_NULL_HANDLE;
     XrSystemId m_systemId  = XR_NULL_SYSTEM_ID;
@@ -100,13 +119,10 @@ class CSession {
 
     XrSessionState m_state          = XR_SESSION_STATE_UNKNOWN;
     bool           m_sessionRunning = false;
-    bool           m_exit           = false;
-    bool           m_exitRequested  = false;
+    bool           m_lost           = false;
     bool           m_haveColorScale = false;
-    bool           m_stdinEof       = false;
 
     std::string                    m_runtimeName;
-    std::string                    m_stdinBuf;
     std::map<uint32_t, SGpuPanel>  m_gpu;
 };
 

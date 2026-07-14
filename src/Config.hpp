@@ -40,6 +40,11 @@ struct SConfig {
     int         texW = 768, texH = 384;
     int         riseMs = 110, holdMs = 2600, fadeMs = 450;
 
+    // WP-H4 runtime re-probe backoff (memo §6.1): grow base->cap while the runtime is
+    // absent; a gentle fixed `base` cadence while the headset is merely undonned.
+    int         reprobeBaseMs = 2000;
+    int         reprobeCapMs  = 30000;
+
     struct SSlotOverride {
         bool  hasPose = false; float px = 0, py = 0, pz = -1;
         bool  hasSize = false; float sizeW = 0.42f;

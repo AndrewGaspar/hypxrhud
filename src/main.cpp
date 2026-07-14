@@ -1,4 +1,5 @@
 #include "Config.hpp"
+#include "Daemon.hpp"
 #include "Log.hpp"
 #include "PngWrite.hpp"
 #include "Preview.hpp"
@@ -9,41 +10,40 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <string>
+#include <unistd.h>
 
 // hypxrhud — the shared XR HUD daemon. Owns ONE OpenXR overlay session and renders an
-// N-panel, slot-based head-locked HUD above HypXRland's monitors. XR utilities push
-// panels to it (voice feedback, screenkey, toasts, media, battery) instead of each
-// re-implementing session/EGL/swapchain/fade machinery. WP-H1+H2: the render core +
-// multi-panel scene; the transport is an interim stdin NDJSON feed (WP-H3 replaces it
-// with a D-Bus front end), and runtime-loss handling exits (WP-H4 makes it persistent).
+// N-panel, slot-based head-locked HUD above HypXRland's monitors. XR utilities push panels
+// over D-Bus (io.github.andrewgaspar.hypxrhud) — voice feedback, screenkey, toasts, media,
+// battery — instead of each re-implementing session/EGL/swapchain/fade machinery.
 //
-// SAFETY: only ONE XR runtime per box. Do not start this alongside another live XR
-// session by hand. `--preview <png>` renders the six-slot composite offline (no XR) and
-// is the review path.
-
-// The XR session lives behind HAVE_XR: when openxr/egl/gbm are absent at build time the
-// daemon still builds and --preview works; running it just reports no runtime.
-#ifdef HAVE_XR
-#include "Egl.hpp"
-#include "Session.hpp"
-#endif
+// WP-H3 adds the sd-bus front end; WP-H4 makes the daemon PERSISTENT: it owns the bus name
+// and accepts panels even when no runtime is present, probing on a backoff and rendering
+// once the runtime/headset appear, surviving a WiVRn disconnect. The XR session lives
+// behind HAVE_XR (built without openxr/egl/gbm the daemon still runs, serving D-Bus and
+// reporting the runtime "absent"). `--preview <png>` renders the six-slot composite offline.
+//
+// SAFETY: only ONE XR runtime per box. Do not start this alongside another live XR session
+// by hand.
 
 std::atomic<bool> g_stopRequested{false};
 static void       onSignal(int) { g_stopRequested.store(true); }
 
-static constexpr int kExitOk        = 0;
-static constexpr int kExitUsage     = 2;
-static constexpr int kExitNoRuntime = 3; // XR runtime unavailable — caller degrades.
+static constexpr int kExitOk    = 0;
+static constexpr int kExitUsage = 2;
 
 static void printUsage(const char* a0) {
     std::fprintf(stderr,
                  "hypxrhud — shared XR HUD daemon for HypXRland\n"
-                 "\nUsage: %s [options]   (reads panel NDJSON on stdin; see README)\n"
+                 "\nUsage: %s [options]   (D-Bus service; see README)\n"
                  "  --config <path>   Config file (default $XDG_CONFIG_HOME/hypxrhud/hypxrhud.toml)\n"
                  "  --preview <png>   Render the six-slot composite to a PNG and exit (no XR)\n"
                  "  --gpu <path>      DRM render node (must match the runtime); overrides config\n"
                  "  --z <int>         Overlay sessionLayersPlacement (default 20); overrides config\n"
+                 "  --stdin           Also read the interim NDJSON panel feed on stdin (debug)\n"
+                 "  --no-xr           Never probe a runtime; serve D-Bus only (tests/headless)\n"
                  "  --verbose         Debug logging\n"
                  "  -h, --help\n",
                  a0);
@@ -55,6 +55,8 @@ int main(int argc, char** argv) {
     std::string gpuOverride;
     bool        haveZ = false;
     int         zOverride = 0;
+    bool        stdinFeed = false;
+    bool        noXr      = false;
 
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -67,6 +69,8 @@ int main(int argc, char** argv) {
         else if (a == "--preview") previewOut = need("--preview");
         else if (a == "--gpu")     gpuOverride = need("--gpu");
         else if (a == "--z")       { zOverride = std::atoi(need("--z")); haveZ = true; }
+        else if (a == "--stdin")   stdinFeed = true;
+        else if (a == "--no-xr")   noXr = true;
         else if (a == "--verbose") Log::setLevel(Log::DEBUG);
         else { Log::log(Log::ERR, "unknown option: {}", a); printUsage(argv[0]); return kExitUsage; }
     }
@@ -104,36 +108,30 @@ int main(int argc, char** argv) {
     }
 
     // ---- signals: handler only sets a flag (SA_RESTART so it never EINTRs Monado's
-    // blocking IPC inside xrEndFrame -> INSTANCE_LOST; hypxrvoice/hypxrpaper lesson) ----
+    // blocking IPC inside xrEndFrame -> INSTANCE_LOST; hypxrvoice/hypxrpaper lesson).
+    // poll() is interrupted regardless (SA_RESTART does not resume poll), so the loop wakes
+    // promptly on SIGTERM. ----
     struct sigaction sa = {};
     sa.sa_handler       = onSignal;
     sa.sa_flags         = SA_RESTART;
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
-#ifdef HAVE_XR
-    hud::CEgl egl;
-    if (!egl.init(cfg.gpu)) {
-        Log::log(Log::ERR, "EGL init failed — no HUD (check --gpu / render node)");
-        return kExitNoRuntime;
+    if (stdinFeed) {
+        // Non-blocking stdin so the poll loop is never stalled waiting for content.
+        int fl = fcntl(STDIN_FILENO, F_GETFL, 0);
+        if (fl >= 0)
+            fcntl(STDIN_FILENO, F_SETFL, fl | O_NONBLOCK);
     }
-    {
-        hud::CSession session;
-        if (!session.init(egl, cfg)) {
-            Log::log(Log::ERR, "XR session init failed — no runtime; HUD unavailable");
-            session.destroy();
-            egl.destroy();
-            return kExitNoRuntime;
-        }
-        Log::log(Log::INFO, "hypxrhud up (runtime present); reading panel feed on stdin");
-        session.run();
-        session.destroy();
-    }
-    egl.destroy();
-    Log::log(Log::INFO, "hypxrhud exited");
-    return kExitOk;
-#else
-    Log::log(Log::ERR, "hypxrhud built without XR support (openxr/egl/gbm missing); only --preview works");
-    return kExitNoRuntime;
+
+#ifndef HAVE_XR
+    if (!noXr)
+        Log::log(Log::WARN, "hypxrhud built without XR support (openxr/egl/gbm missing) — D-Bus only, runtime always absent");
+    noXr = true;
 #endif
+
+    hud::CDaemon daemon(cfg, /*xrEnabled=*/!noXr, /*stdinFeed=*/stdinFeed);
+    int rc = daemon.run();
+    Log::log(Log::INFO, "hypxrhud exited ({})", rc);
+    return rc;
 }

@@ -34,6 +34,13 @@ rise_ms = 110
 hold_ms = 2600
 fade_ms = 450
 
+# Runtime re-probe backoff (WP-H4). While no XR runtime is present the daemon keeps
+# serving D-Bus and retries xrCreateInstance on a growing backoff, doubling from
+# reprobe_base_ms up to reprobe_cap_ms (2s -> 4s -> 8s -> ... -> 30s). While the runtime
+# is up but the headset is undonned it polls at the gentle fixed reprobe_base_ms cadence.
+reprobe_base_ms = 2000
+reprobe_cap_ms  = 30000
+
 # ---- per-slot overrides -------------------------------------------------------------
 # The six slots and their default VIEW-space poses (metres, -z forward). Uncomment and
 # edit to re-pose any slot; `pose` is "x,y,z", `size` is the quad width in metres,

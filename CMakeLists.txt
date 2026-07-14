@@ -10,8 +10,10 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 find_package(PkgConfig REQUIRED)
-# jansson: the interim stdin NDJSON wire format (retired when WP-H3 lands D-Bus).
+# jansson: the interim stdin NDJSON wire format (kept behind --stdin for tests/scripting).
 pkg_check_modules(jansson REQUIRED IMPORTED_TARGET jansson)
+# libsystemd: the sd-bus D-Bus front end (WP-H3). Present on every systemd box.
+pkg_check_modules(libsystemd REQUIRED IMPORTED_TARGET libsystemd)
 
 # ---- optional OpenXR overlay session deps ----
 # The daemon's XR session (Session.cpp + Egl.cpp) needs openxr/egl/gbm. When absent the
@@ -47,6 +49,7 @@ add_library(hypxrhud_core STATIC
     src/Slots.cpp
     src/Scene.cpp
     src/Config.cpp
+    src/Props.cpp
     src/PanelText.cpp
     src/PngWrite.cpp
     src/Wire.cpp
@@ -63,8 +66,11 @@ target_compile_options(hypxrhud_core PRIVATE -Wall -Wextra -Wno-missing-field-in
 set_source_files_properties(src/stb_impl.cpp PROPERTIES COMPILE_OPTIONS "-w")
 
 # ---- daemon ----
-add_executable(hypxrhud src/main.cpp)
-target_link_libraries(hypxrhud PRIVATE hypxrhud_core)
+# The D-Bus front end (Dbus) + persistent event loop / backoff (Daemon) are ALWAYS built —
+# a box without an XR runtime still runs the daemon (owns the bus, accepts panels, reports
+# the runtime "absent"). The XR overlay session (Egl + Session) is added only under HAVE_XR.
+add_executable(hypxrhud src/main.cpp src/Dbus.cpp src/Daemon.cpp)
+target_link_libraries(hypxrhud PRIVATE hypxrhud_core PkgConfig::libsystemd)
 target_compile_options(hypxrhud PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 if(HAVE_XR)
     target_sources(hypxrhud PRIVATE src/Egl.cpp src/Session.cpp)
@@ -73,6 +79,14 @@ if(HAVE_XR)
 endif()
 
 install(TARGETS hypxrhud RUNTIME DESTINATION bin)
+
+# ---- D-Bus service activation (WP-H3) ----
+# Bus-activated on the first CreatePanel/GetCapabilities; the SystemdService= hands off to
+# the user unit. See systemd/hypxrhud.service + dbus/*.service.
+install(FILES dbus/io.github.andrewgaspar.hypxrhud.service
+        DESTINATION share/dbus-1/services)
+install(FILES systemd/hypxrhud.service
+        DESTINATION lib/systemd/user)
 
 # ---- tests (doctest) ----
 enable_testing()
@@ -86,8 +100,34 @@ add_executable(hypxrhud_tests
     tests/test_slots.cpp
     tests/test_config.cpp
     tests/test_preview.cpp
+    tests/test_props.cpp     # WP-H3: props -> SUpsert mapping
+    tests/test_backoff.cpp   # WP-H4: re-probe backoff schedule
 )
 target_include_directories(hypxrhud_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 target_link_libraries(hypxrhud_tests PRIVATE hypxrhud_core)
 target_compile_options(hypxrhud_tests PRIVATE -Wall -Wextra)
 add_test(NAME hypxrhud_tests COMMAND hypxrhud_tests)
+
+# ---- D-Bus integration test (WP-H3) ----
+# Spawns the REAL hypxrhud binary in runtime-absent mode (--no-xr) on a PRIVATE session bus
+# (dbus-run-session) and a client that asserts create/update/dismiss round-trips, the
+# per-client cap, NameOwnerChanged auto-dismiss, and GetCapabilities. Never touches the
+# user's real session bus. Skipped with a clear message if dbus-run-session is unavailable.
+add_executable(hypxrhud_dbus_tests tests/dbus_integration.cpp)
+target_include_directories(hypxrhud_dbus_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(hypxrhud_dbus_tests PRIVATE hypxrhud_core PkgConfig::libsystemd)
+target_compile_options(hypxrhud_dbus_tests PRIVATE -Wall -Wextra)
+
+find_program(DBUS_RUN_SESSION dbus-run-session)
+if(DBUS_RUN_SESSION)
+    add_test(NAME hypxrhud_dbus_tests
+             COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:hypxrhud_dbus_tests>)
+    set_tests_properties(hypxrhud_dbus_tests PROPERTIES
+        ENVIRONMENT "HYPXRHUD_BIN=$<TARGET_FILE:hypxrhud>;HYPXRHUD_DBUS_TEST_OK=1"
+        TIMEOUT 60)
+else()
+    add_test(NAME hypxrhud_dbus_tests
+             COMMAND ${CMAKE_COMMAND} -E echo "SKIP: dbus-run-session not found; D-Bus integration test skipped")
+    message(STATUS "hypxrhud: dbus-run-session not found — integration test will report SKIP")
+endif()
