@@ -93,3 +93,19 @@ io.github.wivrn.Server HeadsetConnected SessionRunning SystemName` →
 `b false`, `b true`, `s "Meta Quest 3"`. No `Battery` property (as expected). UPower
 `DisplayDevice` reported `Percentage 83`, `State 2` (discharging), `Type 2` (Battery),
 `IsPresent true` — so the laptop gauge reads correctly live.
+
+## KNOWN LIMITATION: Elite strap battery is unreadable (2026-07-14)
+
+The headset gauge shows the Quest 3's **internal cell only** — verified correct end to end
+(Android `dumpsys battery` = WiVRn D-Bus `Battery` property = HUD, all agreeing e.g. 85%).
+When an **Elite Strap (battery) is attached and feeding the headset, the internal cell reads
+~full + `charging=true`** while the strap drains — so the gauge can show 85% "charging" while
+the *usable* strap charge (shown in the Quest UI, e.g. 47%) is much lower and invisible to us.
+
+Root cause: the strap has its own fuel gauge (`/sys/class/power_supply/bq27z561-0`) but it is
+**SELinux `Permission denied` even to adb shell**, so a sandboxed Android app (the WiVRn client)
+cannot read it, and Android's app-facing `BatteryManager` API exposes only the internal cell.
+No known third-party-accessible Meta API surfaces accessory battery. NOT fixable in the client
+or the HUD without privileged/root access. Documented as a hardware/OS wall, not a bug.
+Possible future UX softening (not implemented): suppress/annotate the gauge when
+`charging && !wall_power` since the internal % is misleading in that state.
