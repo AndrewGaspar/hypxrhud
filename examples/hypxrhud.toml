@@ -1,0 +1,65 @@
+# hypxrhud — example configuration.
+#
+# Copy to $XDG_CONFIG_HOME/hypxrhud/hypxrhud.toml (or ~/.config/hypxrhud/hypxrhud.toml).
+# All keys are optional; the values shown are the defaults. The loader is a deliberately
+# thin TOML subset (one struct) so a Lua front end can swap in later behind the same
+# config — do not rely on advanced TOML features.
+
+[hud]
+# Overlay stacking placement (sessionLayersPlacement). HypXRland's monitors default to
+# 1; hypxrpaper's background pins to INT64_MIN. 20 keeps the HUD on top of the monitors.
+z = 20
+
+# DRM render node to bind EGL/GBM on. MUST match the node the XR runtime uses. Empty =
+# auto-scan for the first working render node. (--gpu overrides this.)
+gpu = ""
+
+# Default per-panel peak opacity ceiling (the color-scale-bias .a at full fade-in).
+opacity = 0.92
+
+# Environment blend mode for the overlay's own frames: opaque | alpha | additive.
+# Matters mainly when no primary session is alive (memo §6.3); "alpha" suits passthrough.
+blend_mode = "opaque"
+
+# Max simultaneous panels per client (so one buggy client can't exhaust the scene).
+per_client_cap = 4
+
+# Per-panel swapchain / raster size (pixels). Content hugs the centre with transparent
+# margins, so this is a canvas, not the on-screen size (that is the quad `size`, metres).
+tex_w = 768
+tex_h = 384
+
+# Default fade envelope for transient panels (ms). hold_ms < 0 (per-panel) = persist.
+rise_ms = 110
+hold_ms = 2600
+fade_ms = 450
+
+# ---- per-slot overrides -------------------------------------------------------------
+# The six slots and their default VIEW-space poses (metres, -z forward). Uncomment and
+# edit to re-pose any slot; `pose` is "x,y,z", `size` is the quad width in metres,
+# `space` is view|local, `max` is the stack cap (toast only).
+
+# [slot.voice]           # bottom-centre — voice feedback (hypxrvoice)
+# pose = "0,-0.28,-1.0"
+# size = 0.42
+
+# [slot.keys]            # just above voice — screenkey (hypxrkeys)
+# pose = "0,-0.14,-1.0"
+# size = 0.42
+
+# [slot.toast]           # top-centre — notification mirror (bounded stack)
+# pose = "0,0.30,-1.1"
+# size = 0.40
+# max  = 3
+
+# [slot.status]          # bottom-right — pinned status badge
+# pose = "0.55,-0.20,-1.2"
+# size = 0.30
+
+# [slot.media]           # top-left — now-playing widget
+# pose = "-0.55,0.20,-1.2"
+# size = 0.34
+
+# [slot.battery]         # bottom-left — headset + laptop battery gauges
+# pose = "-0.55,-0.20,-1.2"
+# size = 0.30

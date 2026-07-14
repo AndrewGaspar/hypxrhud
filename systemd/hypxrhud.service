@@ -1,0 +1,31 @@
+# hypxrhud — shared XR HUD daemon (systemd user service).
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp systemd/hypxrhud.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now hypxrhud.service
+#
+# The unit needs the session's XR environment (the same variables HypXRland/hypxrpaper
+# use). If your session does not import them into the systemd user environment, add to
+# your Hyprland config:
+#   exec-once = systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR XR_RUNTIME_JSON
+#
+# NOTE (WP-H1/H2): the daemon currently takes its panel feed on stdin (interim NDJSON),
+# so this Type=simple unit is a placeholder. WP-H3 turns hypxrhud into a D-Bus service
+# (Type=dbus, BusName=io.github.andrewgaspar.hypxrhud, bus-activated) and ships a
+# matching /usr/share/dbus-1/services/*.service — see README "What lands in H3/H4".
+
+[Unit]
+Description=hypxrhud — shared XR HUD daemon for HypXRland
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/hypxrhud
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

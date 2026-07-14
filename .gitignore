@@ -1,0 +1,15 @@
+# Build directories
+/build/
+/build-*/
+/out/
+
+# Editor / tooling
+/.cache/
+/.clangd
+/.nvim.lua
+compile_commands.json
+*.o
+*.swp
+
+# Preview / scratch artifacts
+/*.png
