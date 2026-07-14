@@ -27,7 +27,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/hypxrhud-battery
+ExecStart=@HYPXRHUD_BINDIR@/hypxrhud-battery
 Restart=on-failure
 RestartSec=5
 

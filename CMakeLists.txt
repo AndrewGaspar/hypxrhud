@@ -102,17 +102,32 @@ target_link_libraries(hypxrhud-battery PRIVATE hypxrhud_battery_core PkgConfig::
 target_compile_options(hypxrhud-battery PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 install(TARGETS hypxrhud-battery RUNTIME DESTINATION bin)
 
+# Service/activation files carry absolute binary paths, so they are configured with the
+# actual install prefix (a hardcoded /usr/bin ExecStart 203/EXECs on the default
+# /usr/local prefix). @HYPXRHUD_BINDIR@ -> <prefix>/bin.
+if(IS_ABSOLUTE "${CMAKE_INSTALL_PREFIX}")
+    set(HYPXRHUD_BINDIR "${CMAKE_INSTALL_PREFIX}/bin")
+else()
+    set(HYPXRHUD_BINDIR "/${CMAKE_INSTALL_PREFIX}/bin")
+endif()
+configure_file(systemd/hypxrhud.service.in
+               ${CMAKE_CURRENT_BINARY_DIR}/services/hypxrhud.service @ONLY)
+configure_file(systemd/hypxrhud-battery.service.in
+               ${CMAKE_CURRENT_BINARY_DIR}/services/hypxrhud-battery.service @ONLY)
+configure_file(dbus/io.github.andrewgaspar.hypxrhud.service.in
+               ${CMAKE_CURRENT_BINARY_DIR}/services/io.github.andrewgaspar.hypxrhud.service @ONLY)
+
 # The battery client's systemd user unit (a plain client, enabled at login — no D-Bus
 # activation of its own; its first CreatePanel bus-activates the hud daemon).
-install(FILES systemd/hypxrhud-battery.service
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/services/hypxrhud-battery.service
         DESTINATION lib/systemd/user)
 
 # ---- D-Bus service activation (WP-H3) ----
 # Bus-activated on the first CreatePanel/GetCapabilities; the SystemdService= hands off to
-# the user unit. See systemd/hypxrhud.service + dbus/*.service.
-install(FILES dbus/io.github.andrewgaspar.hypxrhud.service
+# the user unit. See systemd/hypxrhud.service.in + dbus/*.service.in.
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/services/io.github.andrewgaspar.hypxrhud.service
         DESTINATION share/dbus-1/services)
-install(FILES systemd/hypxrhud.service
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/services/hypxrhud.service
         DESTINATION lib/systemd/user)
 
 # ---- example config + licence ----

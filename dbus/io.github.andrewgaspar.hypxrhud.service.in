@@ -1,4 +1,4 @@
 [D-BUS Service]
 Name=io.github.andrewgaspar.hypxrhud
-Exec=/usr/bin/hypxrhud
+Exec=@HYPXRHUD_BINDIR@/hypxrhud
 SystemdService=hypxrhud.service

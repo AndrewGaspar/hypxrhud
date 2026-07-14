@@ -32,7 +32,7 @@ PartOf=graphical-session.target
 [Service]
 Type=dbus
 BusName=io.github.andrewgaspar.hypxrhud
-ExecStart=/usr/bin/hypxrhud
+ExecStart=@HYPXRHUD_BINDIR@/hypxrhud
 Restart=on-failure
 RestartSec=2
 
