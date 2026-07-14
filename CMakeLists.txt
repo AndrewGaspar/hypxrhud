@@ -49,6 +49,7 @@ add_library(hypxrhud_core STATIC
     src/Slots.cpp
     src/Scene.cpp
     src/Config.cpp
+    src/BlendMode.cpp
     src/Props.cpp
     src/Theme.cpp
     src/PanelText.cpp
@@ -147,6 +148,8 @@ add_executable(hypxrhud_tests
     tests/test_config.cpp
     tests/test_preview.cpp
     tests/test_props.cpp     # WP-H3: props -> SUpsert mapping
+    tests/test_blendmode.cpp # BUG-1: pure environment-blend-mode pick (passthrough)
+    tests/test_merge.cpp     # BUG-2: partial UpdatePanel MERGE semantics (props -> scene)
     tests/test_backoff.cpp   # WP-H4: re-probe backoff schedule
     tests/test_theme.cpp     # WP-H6: palette parser + resolution (fixtures)
     tests/test_arbiter.cpp   # WP-H5: slot queueing + occupancy introspection

@@ -13,6 +13,7 @@
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
+#include "BlendMode.hpp"
 #include "Config.hpp"
 #include "Scene.hpp"
 #include "Theme.hpp"
@@ -108,7 +109,9 @@ class CSession {
     void       reconcileGpu();                    // destroy swapchains for vanished panels.
     void       uploadPanel(SGpuPanel& g, const uint8_t* rgba);
 
-    XrEnvironmentBlendMode blendMode() const;
+    // Enumerate the runtime's advertised environment blend modes (needs instance+system,
+    // no session) and select ours via the pure pickBlendMode against [hud] blend_mode.
+    void selectBlendMode();
 
     CEgl*   m_egl = nullptr;
     SConfig m_cfg;
@@ -127,6 +130,14 @@ class CSession {
     bool           m_sessionRunning = false;
     bool           m_lost           = false;
     bool           m_haveColorScale = false;
+
+    // BUG-1: the selected environment blend mode. Default OPAQUE, but for an overlay HUD over
+    // passthrough "auto" picks ALPHA_BLEND when the runtime advertises it (WiVRn does) — an
+    // OPAQUE overlay paints the whole view black over passthrough. Selected once in getSystem()
+    // (single-threaded session; the frame thread only reads it). m_warnedBlend keeps the
+    // explicit-unsupported fallback warning to once across reconnects.
+    XrEnvironmentBlendMode m_blendMode   = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    bool                   m_warnedBlend = false;
 
     std::string                    m_runtimeName;
     std::map<uint32_t, SGpuPanel>  m_gpu;

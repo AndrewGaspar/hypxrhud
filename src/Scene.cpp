@@ -60,16 +60,22 @@ uint32_t CScene::upsert(const SUpsert& u, int64_t nowMs, std::vector<SDismissal>
         if (it != m_panels.end()) {
             SPanel& p = it->second;
 
+            // MERGE semantics (BUG-2): a partial UpdatePanel changes ONLY the fields the
+            // client supplied; every absent field keeps the panel's current value. Arbitration
+            // (singleton move / urgency) only reconsiders when the relevant field was supplied.
+            const int newUrgency = u.setUrgency ? u.urgency : p.urgency;
+
             // If the panel is (re)entering a busy singleton slot owned by someone else,
-            // arbitrate exactly as a fresh create would (skip queued members + self).
-            const bool singletonMove = slot && !slot->stack && u.slot != p.slot;
+            // arbitrate exactly as a fresh create would (skip queued members + self). Only a
+            // SUPPLIED slot that actually changes triggers a move.
+            const bool singletonMove = u.setSlot && slot && !slot->stack && u.slot != p.slot;
             bool       makeQueued    = false;
             if (singletonMove) {
                 uint32_t occ = 0;
                 for (auto& [oid, op] : m_panels)
                     if (oid != u.id && op.slot == u.slot && !op.queued) { occ = oid; break; }
                 if (occ) {
-                    if (u.urgency < m_panels.at(occ).urgency) {
+                    if (newUrgency < m_panels.at(occ).urgency) {
                         if (slot->onRefuse == ERefusePolicy::Queue)
                             makeQueued = true; // held pending; promoted when the slot frees.
                         else
@@ -82,18 +88,30 @@ uint32_t CScene::upsert(const SUpsert& u, int64_t nowMs, std::vector<SDismissal>
                 }
             }
 
-            const bool changed = !contentEqual(p.content, u.content);
-            p.owner   = u.owner;
-            p.slot    = u.slot;
-            p.space   = u.space;
-            p.urgency = u.urgency;
-            p.hasPose = u.hasPose; p.px = u.px; p.py = u.py; p.pz = u.pz;
-            p.hasSize = u.hasSize; p.sizeW = u.sizeW;
-            p.fade    = u.fade;
+            // Content merges per sub-field: absent lines/gauges/kind/confidence are preserved,
+            // so an update carrying only gauges keeps any existing title/lines. Epoch bumps
+            // ONLY when the merged content actually rasterises differently (zero-cost contract).
+            SPanelContent merged = p.content;
+            if (u.setKind)       merged.kind       = u.content.kind;
+            if (u.setConfidence) merged.confidence = u.content.confidence;
+            if (u.setLines)      merged.lines      = u.content.lines;
+            if (u.setGauges)     merged.gauges      = u.content.gauges;
+            const bool changed = !contentEqual(p.content, merged);
+
+            p.owner = u.owner; // owner is the caller's bus name from context — always authoritative.
+            if (u.setSlot)    p.slot    = u.slot;
+            if (u.setSpace)   p.space   = u.space;
+            if (u.setUrgency) p.urgency = u.urgency;
+            if (u.hasPose)  { p.hasPose = true; p.px = u.px; p.py = u.py; p.pz = u.pz; }
+            if (u.hasSize)  { p.hasSize = true; p.sizeW = u.sizeW; }
+            if (u.setRise)    p.fade.riseMs      = u.fade.riseMs;
+            if (u.setHold)    p.fade.holdMs      = u.fade.holdMs;
+            if (u.setFade)    p.fade.fadeMs      = u.fade.fadeMs;
+            if (u.setOpacity) p.fade.opacityCeil = u.fade.opacityCeil;
             if (singletonMove)
                 p.queued = makeQueued; // moving into a slot resolves the panel's queued state.
             if (changed) {
-                p.content   = u.content;
+                p.content   = std::move(merged);
                 p.epoch++;            // triggers a single re-raster + upload on the XR side.
                 p.shownAtMs = nowMs;  // refresh the dwell for the new content.
             }

@@ -20,6 +20,22 @@ namespace hud {
 namespace {
     constexpr int64_t kSRGBA = 0x8C43; // GL_SRGB8_ALPHA8
     constexpr int64_t kRGBA8 = 0x8058; // GL_RGBA8
+
+    EBlendMode blendFromXr(XrEnvironmentBlendMode m) {
+        switch (m) {
+            case XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND: return EBlendMode::Alpha;
+            case XR_ENVIRONMENT_BLEND_MODE_ADDITIVE:    return EBlendMode::Additive;
+            default:                                    return EBlendMode::Opaque;
+        }
+    }
+    XrEnvironmentBlendMode blendToXr(EBlendMode m) {
+        switch (m) {
+            case EBlendMode::Alpha:    return XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND;
+            case EBlendMode::Additive: return XR_ENVIRONMENT_BLEND_MODE_ADDITIVE;
+            case EBlendMode::Opaque:   return XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+        }
+        return XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    }
 }
 
 CSession::~CSession() {
@@ -93,7 +109,39 @@ XrResult CSession::getSystem() {
         m_maxLayers = 0;
         Log::log(Log::WARN, "[xr] xrGetSystemProperties failed; assuming spec-minimum layer budget {}", budget());
     }
+    selectBlendMode();
     return XR_SUCCESS;
+}
+
+void CSession::selectBlendMode() {
+    // Enumerate the runtime's advertised blend modes for primary-stereo (preferred-first);
+    // needs only instance+system. The pure pickBlendMode selects ours per [hud] blend_mode.
+    std::vector<EBlendMode> modes;
+    uint32_t                n  = 0;
+    XrResult                r  = xrEnumerateEnvironmentBlendModes(
+        m_instance, m_systemId, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &n, nullptr);
+    if (XR_SUCCEEDED(r) && n) {
+        std::vector<XrEnvironmentBlendMode> xm(n);
+        if (XR_SUCCEEDED(xrEnumerateEnvironmentBlendModes(
+                m_instance, m_systemId, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, n, &n, xm.data())))
+            for (auto m : xm)
+                modes.push_back(blendFromXr(m));
+    } else {
+        Log::log(Log::WARN, "[xr] xrEnumerateEnvironmentBlendModes failed/empty ({}); assuming OPAQUE only", (int)r);
+    }
+
+    SBlendPick pick = pickBlendMode(modes, m_cfg.blendMode);
+    if (pick.requestedUnsupported && !m_warnedBlend) {
+        Log::log(Log::WARN, "[xr] blend_mode '{}' not advertised by runtime; falling back to '{}'",
+                 m_cfg.blendMode, blendModeName(pick.mode));
+        m_warnedBlend = true;
+    }
+    m_blendMode = blendToXr(pick.mode);
+    std::string list;
+    for (auto m : modes)
+        list += (list.empty() ? "" : ", ") + std::string(blendModeName(m));
+    Log::log(Log::INFO, "[xr] environment blend mode: {} (config '{}', runtime advertises: {})",
+             blendModeName(pick.mode), m_cfg.blendMode, list.empty() ? "?" : list);
 }
 
 bool CSession::createSession(CEgl& egl) {
@@ -267,12 +315,6 @@ void CSession::pollEvents() {
         m_lost = true;
 }
 
-XrEnvironmentBlendMode CSession::blendMode() const {
-    if (m_cfg.blendMode == "alpha")    return XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND;
-    if (m_cfg.blendMode == "additive") return XR_ENVIRONMENT_BLEND_MODE_ADDITIVE;
-    return XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
-}
-
 bool CSession::renderFrame(int64_t now) {
     if (!m_sessionRunning || m_session == XR_NULL_HANDLE)
         return false;
@@ -346,7 +388,7 @@ bool CSession::renderFrame(int64_t now) {
 
     XrFrameEndInfo ei       = {XR_TYPE_FRAME_END_INFO};
     ei.displayTime          = fs.predictedDisplayTime;
-    ei.environmentBlendMode = blendMode();
+    ei.environmentBlendMode = m_blendMode;
     ei.layerCount           = (uint32_t)layers.size();
     ei.layers               = layers.data();
     XrResult re             = xrEndFrame(m_session, &ei);

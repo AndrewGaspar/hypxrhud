@@ -124,8 +124,8 @@ bool parseConfig(const std::string& text, SConfig& out, std::vector<std::string>
             else if (key == "blend_mode") {
                 std::string v;
                 if (!setStr(v, val)) continue;
-                if (v == "opaque" || v == "alpha" || v == "additive") out.blendMode = v;
-                else err("hud.blend_mode must be opaque|alpha|additive");
+                if (v == "auto" || v == "opaque" || v == "alpha" || v == "additive") out.blendMode = v;
+                else err("hud.blend_mode must be auto|opaque|alpha|additive");
             }
             else if (key == "per_client_cap") setInt(out.perClientCap, val);
             else if (key == "tex_w")          setInt(out.texW, val);

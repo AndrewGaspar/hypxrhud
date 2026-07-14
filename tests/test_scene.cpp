@@ -8,9 +8,10 @@ namespace {
     SUpsert mk(const std::string& owner, const std::string& slot, int urgency = 1) {
         SUpsert u;
         u.owner   = owner;
-        u.slot    = slot;
-        u.urgency = urgency;
+        u.slot    = slot;    u.setSlot    = true;  // a full spec supplies these (BUG-2 merge flags).
+        u.urgency = urgency; u.setUrgency = true;
         u.content.lines = {{"panel", EColor::Normal, false}};
+        u.setLines = true;
         return u;
     }
     bool dismissedHas(const std::vector<SDismissal>& d, uint32_t id, const std::string& reason) {

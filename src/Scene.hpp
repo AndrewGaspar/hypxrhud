@@ -60,6 +60,17 @@ struct SUpsert {
     int           urgency = 1;
     SFade         fade;
     SPanelContent content;
+
+    // MERGE presence flags (BUG-2). On an UPDATE (id != 0) ONLY supplied keys overwrite the
+    // panel's current value; absent keys are preserved — a partial UpdatePanel (e.g. the
+    // battery client resending only its gauges) must NOT reset the panel's slot/pose/size/
+    // envelope to defaults and snap it to centre-FoV. On a CREATE every field is applied
+    // (absent ones use the SUpsert defaults, seeded from config). pose/size reuse hasPose/
+    // hasSize (a pose/size key is the only way those become true — there is no "clear").
+    // upsertFromProps sets these per key present; the pure mapper never inspects the scene.
+    bool setSlot = false, setSpace = false, setUrgency = false;
+    bool setRise = false, setHold = false, setFade = false, setOpacity = false;
+    bool setKind = false, setConfidence = false, setLines = false, setGauges = false;
 };
 
 // A panel that left the scene, with a reason (design memo §2.3 PanelDismissed reasons:

@@ -17,9 +17,11 @@ gpu = ""
 # Default per-panel peak opacity ceiling (the color-scale-bias .a at full fade-in).
 opacity = 0.92
 
-# Environment blend mode for the overlay's own frames: opaque | alpha | additive.
-# Matters mainly when no primary session is alive (memo §6.3); "alpha" suits passthrough.
-blend_mode = "opaque"
+# Environment blend mode for the overlay's own frames: auto | opaque | alpha | additive.
+# "auto" (default) prefers ALPHA_BLEND when the runtime advertises it, so the HUD panels
+# composite over passthrough; an OPAQUE overlay would paint the whole view black over
+# passthrough. It falls back to the runtime's preferred mode when alpha is unavailable.
+blend_mode = "auto"
 
 # Max simultaneous panels per client (so one buggy client can't exhaust the scene).
 per_client_cap = 4

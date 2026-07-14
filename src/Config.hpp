@@ -17,7 +17,7 @@
 //     z            = 20        # overlay sessionLayersPlacement (above HypXRland monitors)
 //     gpu          = "/dev/dri/renderD128"  # DRM render node; empty = auto (match runtime)
 //     opacity      = 0.92      # default per-panel opacity ceiling
-//     blend_mode   = "opaque"  # opaque | alpha | additive (memo §6.3)
+//     blend_mode   = "auto"    # auto | opaque | alpha | additive (auto: prefer alpha over passthrough, memo §6.3)
 //     per_client_cap = 4       # max panels per client (triage #9)
 //     tex_w = 768              # per-panel swapchain/raster width
 //     tex_h = 384              # per-panel swapchain/raster height
@@ -40,7 +40,7 @@ struct SConfig {
     int         hudZ         = 20;
     std::string gpu;                       // empty = auto-scan render node.
     float       opacity      = 0.92f;      // default opacity ceiling.
-    std::string blendMode    = "opaque";   // opaque | alpha | additive.
+    std::string blendMode    = "auto";     // auto | opaque | alpha | additive (auto: prefer alpha for the overlay).
     int         perClientCap = 4;
     int         texW = 768, texH = 384;
     int         riseMs = 110, holdMs = 2600, fadeMs = 450;
