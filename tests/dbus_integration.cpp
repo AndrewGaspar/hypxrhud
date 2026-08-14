@@ -108,6 +108,14 @@ namespace {
         return out;
     }
 
+    bool rendering(sd_bus* bus) {
+        sd_bus_error err = SD_BUS_ERROR_NULL;
+        int          value = 0;
+        sd_bus_get_property_trivial(bus, kBusName, kObjPath, kIface, "Rendering", &err, 'b', &value);
+        sd_bus_error_free(&err);
+        return value != 0;
+    }
+
     // Wait until the daemon owns the name (its GetCapabilities answers) or timeout.
     bool waitForDaemon(sd_bus* bus, int timeoutMs) {
         const int64_t deadline = nowMs() + timeoutMs;
@@ -194,8 +202,10 @@ TEST_CASE("dbus: full create/update/dismiss + cap + NameOwnerChanged auto-dismis
         CHECK(has("slots"));
         CHECK(has("spaces"));
         CHECK(has("perClientCap"));
+        CHECK(has("rendering"));
 
         CHECK(runtimeState(bus) == "absent"); // --no-xr never probes a runtime.
+        CHECK_FALSE(rendering(bus));
     }
 
     SUBCASE("create / update / dismiss round-trip with signal") {

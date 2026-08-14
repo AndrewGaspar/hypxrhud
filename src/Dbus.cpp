@@ -163,6 +163,12 @@ namespace {
         sd_bus_message_append(m, "v", "u", val);
         sd_bus_message_close_container(m);
     }
+    void appendB(sd_bus_message* m, const char* key, bool val) {
+        sd_bus_message_open_container(m, 'e', "sv");
+        sd_bus_message_append(m, "s", key);
+        sd_bus_message_append(m, "v", "b", val ? 1 : 0);
+        sd_bus_message_close_container(m);
+    }
 }
 
 CBus::~CBus() {
@@ -198,10 +204,15 @@ bool CBus::init(CScene& scene, const SConfig& cfg) {
                                 SD_BUS_NO_ARGS,
                                 SD_BUS_RESULT("a{sv}", caps),
                                 CBus::onGetCapabilities, SD_BUS_VTABLE_UNPRIVILEGED),
+        SD_BUS_METHOD_WITH_ARGS("GetPanelPresentation",
+                                SD_BUS_ARGS("u", id),
+                                SD_BUS_RESULT("t", panelSerial, "t", frameSerial, "t", streakStart),
+                                CBus::onGetPanelPresentation, SD_BUS_VTABLE_UNPRIVILEGED),
         SD_BUS_SIGNAL_WITH_NAMES("PanelDismissed", "us", SD_BUS_PARAM(id) SD_BUS_PARAM(reason), 0),
         SD_BUS_SIGNAL_WITH_NAMES("RuntimeStateChanged", "s", SD_BUS_PARAM(state), 0),
         SD_BUS_PROPERTY("RuntimeState", "s", CBus::propRuntimeState, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
         SD_BUS_PROPERTY("RuntimeName", "s", CBus::propRuntimeName, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+        SD_BUS_PROPERTY("Rendering", "b", CBus::propRendering, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
         SD_BUS_PROPERTY("PanelCount", "u", CBus::propPanelCount, 0, 0),
         SD_BUS_PROPERTY("MaxPanels", "u", CBus::propMaxPanels, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
         SD_BUS_VTABLE_END,
@@ -243,6 +254,7 @@ void CBus::shutdown() {
     if (m_vtable)  { sd_bus_slot_unref(m_vtable);  m_vtable  = nullptr; }
     if (m_bus)     { sd_bus_flush_close_unref(m_bus); m_bus = nullptr; }
     m_haveName = false;
+    m_presentations.reset();
 }
 
 int CBus::fd() const { return m_bus ? sd_bus_get_fd(m_bus) : -1; }
@@ -296,7 +308,20 @@ void CBus::setRuntimeInfo(const std::string& runtimeName, int64_t maxLayers, int
     }
 }
 
+void CBus::setRendering(bool rendering) {
+    if (rendering == m_rendering)
+        return;
+    m_rendering = rendering;
+    if (m_bus && m_haveName)
+        sd_bus_emit_properties_changed(m_bus, kObjPath, kIface, "Rendering", nullptr);
+}
+
+void CBus::markPresented(const std::vector<uint32_t>& panelIds) {
+    m_presentations.recordFrame(true, panelIds);
+}
+
 void CBus::emitOne(uint32_t id, const std::string& reason) {
+    m_presentations.dismiss(id);
     if (m_bus && m_haveName)
         sd_bus_emit_signal(m_bus, kObjPath, kIface, "PanelDismissed", "us", id, reason.c_str());
 }
@@ -429,11 +454,23 @@ int CBus::onGetCapabilities(sd_bus_message* m, void* userdata, sd_bus_error* /*e
 
     appendStr(reply, "runtimeState", self->m_state.c_str());
     appendStr(reply, "runtimeName", self->m_runtimeName.c_str());
+    appendB(reply, "rendering", self->m_rendering);
 
     sd_bus_message_close_container(reply); // a{sv}
     int r = sd_bus_send(nullptr, reply, nullptr);
     sd_bus_message_unref(reply);
     return r < 0 ? r : 1;
+}
+
+int CBus::onGetPanelPresentation(sd_bus_message* m, void* userdata, sd_bus_error* err) {
+    auto* self = static_cast<CBus*>(userdata);
+    uint32_t id = 0;
+    if (sd_bus_message_read(m, "u", &id) < 0) {
+        sd_bus_error_set(err, "io.github.andrewgaspar.hypxrhud1.Error.BadArgs", "expected (u id)");
+        return -EINVAL;
+    }
+    const SPresentationSnapshot snapshot = self->m_presentations.snapshot(id);
+    return sd_bus_reply_method_return(m, "ttt", snapshot.panelSerial, snapshot.frameSerial, snapshot.streakStart);
 }
 
 // ---- properties -----------------------------------------------------------------------
@@ -447,6 +484,11 @@ int CBus::propRuntimeName(sd_bus*, const char*, const char*, const char*, sd_bus
                           void* userdata, sd_bus_error*) {
     auto* self = static_cast<CBus*>(userdata);
     return sd_bus_message_append(reply, "s", self->m_runtimeName.c_str());
+}
+int CBus::propRendering(sd_bus*, const char*, const char*, const char*, sd_bus_message* reply,
+                        void* userdata, sd_bus_error*) {
+    auto* self = static_cast<CBus*>(userdata);
+    return sd_bus_message_append(reply, "b", self->m_rendering ? 1 : 0);
 }
 int CBus::propPanelCount(sd_bus*, const char*, const char*, const char*, sd_bus_message* reply,
                          void* userdata, sd_bus_error*) {

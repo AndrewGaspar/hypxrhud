@@ -72,8 +72,9 @@ class CSession {
     void pollEvents();
 
     // Submit one frame (one quad per visible panel). xrWaitFrame paces the caller. Returns
-    // false if nothing was submitted (session not running / loss); sets lost() on loss.
-    bool renderFrame(int64_t nowMs);
+    // true only for a successful frame where shouldRender was true; on success,
+    // `submittedIds` is exactly the panels included in xrEndFrame's layer array.
+    bool renderFrame(int64_t nowMs, std::vector<uint32_t>* submittedIds = nullptr);
 
     // Ask the runtime to end the session cleanly (SIGTERM path). The subsequent EXITING
     // event sets lost(); the daemon distinguishes a requested exit from a surprise loss.

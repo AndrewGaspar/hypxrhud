@@ -14,6 +14,8 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(jansson REQUIRED IMPORTED_TARGET jansson)
 # libsystemd: the sd-bus D-Bus front end (WP-H3). Present on every systemd box.
 pkg_check_modules(libsystemd REQUIRED IMPORTED_TARGET libsystemd)
+# xkbcommon: translates ShowMeTheKey's evdev keycodes using the configured RMLVO keymap.
+pkg_check_modules(xkbcommon REQUIRED IMPORTED_TARGET xkbcommon)
 
 # ---- optional OpenXR overlay session deps ----
 # The daemon's XR session (Session.cpp + Egl.cpp) needs openxr/egl/gbm. When absent the
@@ -46,6 +48,7 @@ add_custom_command(
 add_library(hypxrhud_core STATIC
     src/Log.cpp
     src/Panel.cpp
+    src/Presentation.cpp
     src/Slots.cpp
     src/Scene.cpp
     src/Config.cpp
@@ -103,6 +106,28 @@ target_link_libraries(hypxrhud-battery PRIVATE hypxrhud_battery_core PkgConfig::
 target_compile_options(hypxrhud-battery PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 install(TARGETS hypxrhud-battery RUNTIME DESTINATION bin)
 
+# ---- hypxrhud-keys: privacy-visible keystroke overlay -------------------------------
+add_library(hypxrhud_keys_core STATIC
+    src/keys/Disclosure.cpp
+    src/keys/KeyEvent.cpp
+    src/keys/KeysConfig.cpp
+    src/keys/KeysModel.cpp
+)
+target_link_libraries(hypxrhud_keys_core PUBLIC hypxrhud_core PkgConfig::xkbcommon)
+target_compile_options(hypxrhud_keys_core PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+
+add_library(hypxrhud_keys_runtime STATIC
+    src/keys/KeySource.cpp
+    src/keys/KeysClient.cpp
+)
+target_link_libraries(hypxrhud_keys_runtime PUBLIC hypxrhud_keys_core PkgConfig::libsystemd)
+target_compile_options(hypxrhud_keys_runtime PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+
+add_executable(hypxrhud-keys src/keys/main.cpp)
+target_link_libraries(hypxrhud-keys PRIVATE hypxrhud_keys_runtime)
+target_compile_options(hypxrhud-keys PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+install(TARGETS hypxrhud-keys RUNTIME DESTINATION bin)
+
 # Service/activation files carry absolute binary paths, so they are configured with the
 # actual install prefix (a hardcoded /usr/bin ExecStart 203/EXECs on the default
 # /usr/local prefix). @HYPXRHUD_BINDIR@ -> <prefix>/bin.
@@ -115,12 +140,18 @@ configure_file(systemd/hypxrhud.service.in
                ${CMAKE_CURRENT_BINARY_DIR}/services/hypxrhud.service @ONLY)
 configure_file(systemd/hypxrhud-battery.service.in
                ${CMAKE_CURRENT_BINARY_DIR}/services/hypxrhud-battery.service @ONLY)
+configure_file(systemd/hypxrhud-keys.service.in
+               ${CMAKE_CURRENT_BINARY_DIR}/services/hypxrhud-keys.service @ONLY)
 configure_file(dbus/io.github.andrewgaspar.hypxrhud.service.in
                ${CMAKE_CURRENT_BINARY_DIR}/services/io.github.andrewgaspar.hypxrhud.service @ONLY)
 
 # The battery client's systemd user unit (a plain client, enabled at login — no D-Bus
 # activation of its own; its first CreatePanel bus-activates the hud daemon).
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/services/hypxrhud-battery.service
+        DESTINATION lib/systemd/user)
+# Deliberately static/manual: no [Install] section means packaging cannot accidentally
+# start a key-capture service at login.
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/services/hypxrhud-keys.service
         DESTINATION lib/systemd/user)
 
 # ---- D-Bus service activation (WP-H3) ----
@@ -132,7 +163,8 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/services/hypxrhud.service
         DESTINATION lib/systemd/user)
 
 # ---- example config + licence ----
-install(FILES examples/hypxrhud.toml DESTINATION share/hypxrhud/examples)
+install(FILES examples/hypxrhud.toml examples/battery.toml examples/keys.toml
+        DESTINATION share/hypxrhud/examples)
 install(FILES LICENSE                 DESTINATION share/licenses/hypxrhud)
 
 # ---- tests (doctest) ----
@@ -140,6 +172,7 @@ enable_testing()
 add_executable(hypxrhud_tests
     tests/tests_main.cpp
     tests/test_panel.cpp
+    tests/test_presentation.cpp
     tests/test_envelope.cpp
     tests/test_raster.cpp
     tests/test_wire.cpp
@@ -154,11 +187,16 @@ add_executable(hypxrhud_tests
     tests/test_theme.cpp     # WP-H6: palette parser + resolution (fixtures)
     tests/test_arbiter.cpp   # WP-H5: slot queueing + occupancy introspection
     tests/test_battery.cpp   # battery client: model/diff/latch + config
+    tests/test_keys.cpp      # keys client: strict parser/xkb/model/config/tracked source
 )
 target_include_directories(hypxrhud_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
-target_link_libraries(hypxrhud_tests PRIVATE hypxrhud_core hypxrhud_battery_core)
+target_link_libraries(hypxrhud_tests PRIVATE hypxrhud_core hypxrhud_battery_core hypxrhud_keys_runtime)
 target_compile_options(hypxrhud_tests PRIVATE -Wall -Wextra)
 add_test(NAME hypxrhud_tests COMMAND hypxrhud_tests)
+
+add_executable(hypxrhud_key_source_fixture tests/key_source_fixture.cpp)
+set_tests_properties(hypxrhud_tests PROPERTIES
+    ENVIRONMENT "HYPXRHUD_KEY_SOURCE_FIXTURE=$<TARGET_FILE:hypxrhud_key_source_fixture>")
 
 # ---- D-Bus integration test (WP-H3) ----
 # Spawns the REAL hypxrhud binary in runtime-absent mode (--no-xr) on a PRIVATE session bus
@@ -186,6 +224,26 @@ else()
     add_test(NAME hypxrhud_dbus_tests
              COMMAND ${CMAKE_COMMAND} -E echo "SKIP: dbus-run-session not found; D-Bus integration test skipped")
     message(STATUS "hypxrhud: dbus-run-session not found — integration test will report SKIP")
+endif()
+
+# ---- keys client D-Bus integration test ---------------------------------------------
+# Synthetic panel text only; no ShowMeTheKey process and no input-device access. Verifies
+# the startup disclosure/presentation query and PanelDismissed -> recreate lifecycle on a private bus.
+add_executable(hypxrhud_keys_dbus_tests tests/keys_integration.cpp)
+target_include_directories(hypxrhud_keys_dbus_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(hypxrhud_keys_dbus_tests PRIVATE hypxrhud_keys_runtime)
+target_compile_options(hypxrhud_keys_dbus_tests PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+
+if(DBUS_RUN_SESSION)
+    add_test(NAME hypxrhud_keys_dbus_tests
+             COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:hypxrhud_keys_dbus_tests>)
+    set_tests_properties(hypxrhud_keys_dbus_tests PROPERTIES
+        ENVIRONMENT "HYPXRHUD_BIN=$<TARGET_FILE:hypxrhud>;HYPXRHUD_DBUS_TEST_OK=1;XDG_DATA_DIRS=${CMAKE_CURRENT_BINARY_DIR}/no-xdg-data"
+        TIMEOUT 60)
+else()
+    add_test(NAME hypxrhud_keys_dbus_tests
+             COMMAND ${CMAKE_COMMAND} -E echo "SKIP: dbus-run-session not found; keys integration test skipped")
 endif()
 
 # ---- battery client D-Bus integration test ------------------------------------------

@@ -138,6 +138,7 @@ void CDaemon::tryBringUp(int64_t now) {
 void CDaemon::onSessionLost(int64_t now) {
     Log::log(Log::WARN, "[daemon] XR session lost — tearing down; re-probing (panels kept)");
     m_session.teardown();
+    m_bus.setRendering(false);
     m_bus.setRuntimeInfo("", 0, 0);
     m_attempt     = 0;                                  // a dropped live session: retry promptly.
     m_nextProbeAt = now + std::max<int64_t>(250, m_cfg.reprobeBaseMs);
@@ -249,12 +250,19 @@ int CDaemon::run() {
                 onSessionLost(now);
                 continue;
             }
-            if (m_session.sessionRunning() && !m_stop)
-                m_session.renderFrame(now);
+            bool rendered = false;
+            std::vector<uint32_t> presented;
+            if (m_session.sessionRunning() && !m_stop) {
+                rendered = m_session.renderFrame(now, &presented);
+                if (rendered)
+                    m_bus.markPresented(presented);
+            }
+            m_bus.setRendering(rendered);
             // While stopping, keep pumping events (above) until EXITING; bail if it never comes.
             if (m_stop && m_exitAsked && now - m_exitAskedAt > kExitGraceMs)
                 break;
         } else if (m_xrEnabled && !m_stop) {
+            m_bus.setRendering(false);
             if (now >= m_nextProbeAt)
                 tryBringUp(now);
         }
@@ -262,6 +270,7 @@ int CDaemon::run() {
     }
 
     Log::log(Log::INFO, "[daemon] shutting down");
+    m_bus.setRendering(false);
     m_themeWatch.shutdown();
 #ifdef HAVE_XR
     m_session.teardown();

@@ -1,0 +1,18 @@
+# hypxrhud-keys captures keyboard events. It is intentionally a MANUAL, static user unit:
+# there is no [Install] section and it must never be enabled at login. Starting it first
+# requires a live XR runtime, shows an explicit in-headset privacy indicator for a disclosure
+# dwell, then launches the fixed
+# /usr/bin/showmethekey-cli source. Stopping it terminates that exact child and dismisses
+# its HUD panel.
+
+[Unit]
+Description=hypxrhud manual keystroke overlay (privacy-sensitive)
+Documentation=https://github.com/AndrewGaspar/hypxrhud
+After=graphical-session.target hypxrhud.service
+ConditionFileIsExecutable=/usr/bin/showmethekey-cli
+
+[Service]
+Type=simple
+ExecStart=@HYPXRHUD_BINDIR@/hypxrhud-keys
+Restart=no
+NoNewPrivileges=yes

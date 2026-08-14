@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Config.hpp"
+#include "Presentation.hpp"
 #include "Scene.hpp"
 
 #include <cstdint>
@@ -64,6 +65,8 @@ class CBus {
     // PropertiesChanged for RuntimeState only when it actually changes (not spammy).
     void setRuntimeState(const std::string& state);
     void setRuntimeInfo(const std::string& runtimeName, int64_t maxLayers, int budget);
+    void setRendering(bool rendering);
+    void markPresented(const std::vector<uint32_t>& panelIds);
 
     // Emit PanelDismissed(id, reason) for a batch (reapExpired / bring-up preemptions the
     // daemon collects outside a method call).
@@ -77,9 +80,11 @@ class CBus {
     static int onUpdatePanel(sd_bus_message*, void*, sd_bus_error*);
     static int onDismissPanel(sd_bus_message*, void*, sd_bus_error*);
     static int onGetCapabilities(sd_bus_message*, void*, sd_bus_error*);
+    static int onGetPanelPresentation(sd_bus_message*, void*, sd_bus_error*);
     static int propRuntimeState(sd_bus*, const char*, const char*, const char*, sd_bus_message*, void*, sd_bus_error*);
     static int propPanelCount(sd_bus*, const char*, const char*, const char*, sd_bus_message*, void*, sd_bus_error*);
     static int propRuntimeName(sd_bus*, const char*, const char*, const char*, sd_bus_message*, void*, sd_bus_error*);
+    static int propRendering(sd_bus*, const char*, const char*, const char*, sd_bus_message*, void*, sd_bus_error*);
     static int propMaxPanels(sd_bus*, const char*, const char*, const char*, sd_bus_message*, void*, sd_bus_error*);
     static int onNameOwnerChanged(sd_bus_message*, void*, sd_bus_error*);
 
@@ -95,8 +100,10 @@ class CBus {
 
     std::string m_state       = "absent";
     std::string m_runtimeName;
+    bool        m_rendering   = false;
     int64_t     m_maxLayers   = 0;
     int         m_budget      = 0;
+    CPresentationTracker m_presentations;
 };
 
 } // namespace hud

@@ -12,7 +12,8 @@ It pairs with the family: **hypxrpaper** owns the *primary* session (the
 environment), **HypXRland** composites monitor quads as an overlay, and
 **hypxrhud** sits on top as a second overlay carrying the HUD.
 
-> Status: **WP-H1 … WP-H7** complete. The render core + multi-panel slot scene
+> Status: **WP-H1 … WP-H7** complete, plus the first-party **`hypxrhud-keys`**
+> ShowMeTheKey producer. The render core + multi-panel slot scene
 > (H1/H2), the **D-Bus front end** (H3, `io.github.andrewgaspar.hypxrhud`), the
 > **persistent lifecycle + re-probe backoff** (H4), the **slot arbiter polish**
 > (H5 — queueing + occupancy introspection), **Omarchy theming** (H6 — live palette
@@ -131,13 +132,36 @@ one-shot toast per source per discharge cycle. Config: `examples/battery.toml`
 `systemd/hypxrhud-battery.service`. Run `hypxrhud-battery --once --verbose` to print a
 one-shot source read without looping.
 
+### `hypxrhud-keys` (recording keystrokes)
+
+`hypxrhud-keys` feeds the existing head-locked `keys` slot from the fixed
+`/usr/bin/showmethekey-cli` backend. It translates evdev keycodes through a configurable
+xkbcommon RMLVO keymap, orders chords consistently, suppresses held repeats, coalesces
+repeated presses, and keeps bounded history. `--mods-only` is the preferred filming mode:
+ordinary typed text never enters the model, while shortcuts and control/navigation keys
+remain visible.
+
+Capture is intentionally manual. The installed user unit has no `[Install]` section; the exact
+`KEY DISPLAY ON` panel ID must appear in successful `shouldRender` frame submissions for a
+disclosure dwell before the backend is started. A merely accepted, queued, budget-dropped, or
+zero-layer panel cannot open capture. Loss of that runtime/HUD owner stops the exact tracked
+child. The disclosure stays as a persistent first row, and any later break in that exact
+panel's continuous presentation streak also stops capture. Neither key text nor source JSON
+is logged.
+See [`docs/keys-overlay.md`](docs/keys-overlay.md) for the privacy model, config, tests, and
+film-ready commands.
+
 ## Building
 
-Requirements: a C++23 compiler, CMake ≥ 3.20, `jansson` (interim wire format), and
+Requirements: a C++23 compiler, CMake ≥ 3.20, `jansson` (interim wire format),
+`libsystemd`, and `xkbcommon` (the keystroke producer), plus
 — for the XR session — an OpenXR runtime plus `egl`, `glesv2`, `gbm`, `libdrm`
 (Monado / WiVRn expose `XR_MNDX_egl_enable`, `XR_KHR_opengl_es_enable`,
 `XR_EXTX_overlay`). When the XR deps are absent the daemon still builds and
 `--preview` works; running it just reports no runtime.
+
+The keystroke producer additionally expects ShowMeTheKey's backend at the fixed runtime
+path `/usr/bin/showmethekey-cli`; builds and tests do not execute it.
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
@@ -164,6 +188,9 @@ busctl --user call io.github.andrewgaspar.hypxrhud \
 build/hypxrhud --stdin < panels.ndjson
 # Headless / CI: never probe a runtime, serve D-Bus only.
 build/hypxrhud --no-xr
+
+# Manual keystroke overlay. It shows an in-HUD disclosure before capture starts.
+build/hypxrhud-keys --mods-only
 
 # One-command health check: spins a PRIVATE bus, spawns the daemon (--no-xr), runs a
 # create/update/dismiss + capabilities round-trip, exits 0 (healthy) or nonzero.
@@ -248,13 +275,15 @@ Bus name **`io.github.andrewgaspar.hypxrhud`**, object
 CreatePanel(a{sv} props) -> u id      # 0 never returned; a refusal is a D-Bus error
 UpdatePanel(u id, a{sv} props) -> ()  # designed for NO_REPLY_EXPECTED (fire-and-forget)
 DismissPanel(u id) -> ()
-GetCapabilities() -> a{sv}            # version, maxLayerCount, budget, perClientCap,
+GetCapabilities() -> a{sv}            # version, maxLayerCount, budget, perClientCap, rendering,
                                       #  slots[], slotOccupancy a(suu) (name,active,queued),
                                       #  spaces[], runtimeState, runtimeName
+GetPanelPresentation(u id) -> ttt      # panel serial, latest frame serial, continuous-streak start
 signal PanelDismissed(u id, s reason) # "expired" | "client" | "preempted" | "client-gone"
 signal RuntimeStateChanged(s state)   # "absent" | "connecting" | "live"
 property s RuntimeState  (read, emits-change)
 property s RuntimeName   (read, emits-change)
+property b Rendering     (read, emits-change) # true only after a successful XR frame submit
 property u PanelCount    (read)
 property u MaxPanels     (read, emits-change)   # = the effective per-frame layer budget
 ```

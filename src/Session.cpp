@@ -315,7 +315,9 @@ void CSession::pollEvents() {
         m_lost = true;
 }
 
-bool CSession::renderFrame(int64_t now) {
+bool CSession::renderFrame(int64_t now, std::vector<uint32_t>* submittedIds) {
+    if (submittedIds)
+        submittedIds->clear();
     if (!m_sessionRunning || m_session == XR_NULL_HANDLE)
         return false;
 
@@ -336,9 +338,11 @@ bool CSession::renderFrame(int64_t now) {
     std::vector<XrCompositionLayerQuad>              quads;
     std::vector<XrCompositionLayerColorScaleBiasKHR> csbs;
     std::vector<const XrCompositionLayerBaseHeader*> layers;
+    std::vector<uint32_t>                            layerIds;
     quads.reserve(cap);
     csbs.reserve(cap);
     layers.reserve(cap);
+    layerIds.reserve(cap);
 
     if (fs.shouldRender) {
         for (uint32_t id : m_scene->submitOrder(now, cap)) {
@@ -383,6 +387,7 @@ bool CSession::renderFrame(int64_t now) {
                 quads.back().next = &csbs.back();
             }
             layers.push_back(reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quads.back()));
+            layerIds.push_back(id);
         }
     }
 
@@ -393,6 +398,10 @@ bool CSession::renderFrame(int64_t now) {
     ei.layers               = layers.data();
     XrResult re             = xrEndFrame(m_session, &ei);
     if (re == XR_ERROR_SESSION_LOST || re == XR_ERROR_INSTANCE_LOST) { m_lost = true; return false; }
+    if (XR_FAILED(re) || !fs.shouldRender)
+        return false;
+    if (submittedIds)
+        *submittedIds = std::move(layerIds);
     return true;
 }
 

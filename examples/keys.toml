@@ -1,0 +1,23 @@
+# hypxrhud-keys is a privacy-sensitive, manually-started keystroke overlay.
+# Copy to ~/.config/hypxrhud/keys.toml only after reviewing these settings.
+
+[keys]
+# XKB RMLVO. Empty rules/model use xkbcommon defaults. Match these to the compositor.
+rules = "evdev"
+model = "pc105"
+layout = "us"
+variant = ""
+options = "caps:swapescape"
+
+slot = "keys"
+history = 3
+coalesce_ms = 900
+rise_ms = 50
+# How long the exact submitted disclosure must remain continuously visible before capture.
+privacy_hold_ms = 1800
+# Kept above 0.2 so the mandatory disclosure cannot be configured effectively invisible.
+opacity = 0.92
+
+# Strongly recommended when the demo only needs shortcuts. Plain typed characters are
+# never retained by the model; Ctrl/Alt/Super chords and named control keys remain visible.
+mods_only = false
