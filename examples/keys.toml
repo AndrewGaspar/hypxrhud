@@ -20,4 +20,5 @@ opacity = 0.92
 
 # Strongly recommended when the demo only needs shortcuts. Plain typed characters are
 # never retained by the model; Ctrl/Alt/Super chords and named control keys remain visible.
+# This filters after ShowMeTheKey reads the device stream; stop capture before typing secrets.
 mods_only = false

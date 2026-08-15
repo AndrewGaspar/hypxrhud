@@ -3,7 +3,7 @@
 **A shared XR HUD daemon for the HypXRland ecosystem.** It owns **one** OpenXR
 overlay session and renders an **N-panel, slot-based, head-locked HUD** above
 HypXRland's monitor quads. XR utilities — [hypxrvoice](../hypxrvoice)'s feedback
-HUD, the planned `hypxrkeys` screenkey overlay, in-headset notification toasts, a
+HUD, the first-party `hypxrhud-keys` screenkey overlay, in-headset notification toasts, a
 now-playing widget, a battery readout — push panels to hypxrhud instead of each
 re-implementing session lifecycle, EGL, swapchains, and fade machinery (and each
 re-risking Monado's GL-fence contract).
@@ -161,7 +161,7 @@ Requirements: a C++23 compiler, CMake ≥ 3.20, `jansson` (interim wire format),
 `--preview` works; running it just reports no runtime.
 
 The keystroke producer additionally expects ShowMeTheKey's backend at the fixed runtime
-path `/usr/bin/showmethekey-cli`; builds and tests do not execute it.
+path `/usr/bin/showmethekey-cli`; builds, tests, and install steps do not execute it.
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
@@ -305,6 +305,15 @@ Unknown keys are ignored (forward-compatible). Every panel is keyed to the calle
 `share/dbus-1/services/` and `lib/systemd/user/`. `systemctl --user enable --now
 hypxrhud.service` starts it eagerly instead.
 
+For a user-local `--prefix "$HOME/.local"` install, check `systemd-analyze --user
+unit-paths` before relying on the generated `<prefix>/lib/systemd/user` files. Some
+user managers, including the current development host, search
+`~/.local/share/systemd/user` but not `~/.local/lib/systemd/user`. Copy the generated
+units to the higher-precedence `~/.config/systemd/user/` directory and run
+`systemctl --user daemon-reload`, or use a searched system prefix. See
+[`docs/keys-overlay.md`](docs/keys-overlay.md#current-development-host-handoff-2026-08-14)
+for the exact development-host state.
+
 ### `--stdin` NDJSON debug feed
 
 With `--stdin`, one JSON object per line drives the *same* scene API (useful for
@@ -382,6 +391,12 @@ session, and drive panels with `busctl` as above):
       (foreground/accent/panel background follow the theme).
 - [ ] Lifecycle: kill/restart the runtime → panels survive the gap and reappear;
       compositor (primary) restart → the HUD keeps rendering.
+- [ ] Start `hypxrhud-keys --mods-only --verbose`; verify the exact disclosure appears
+      before capture, shortcuts update the `keys` panel, ordinary text does not appear,
+      and stopping the process immediately dismisses the panel.
+- [ ] While `hypxrhud-keys` is capturing, remove or preempt its exact panel and then
+      disconnect the runtime; each event must stop the tracked ShowMeTheKey child and
+      require a deliberate restart.
 - [ ] `SIGTERM` ends the session cleanly and releases the bus name.
 
 ## Seams left for later milestones
@@ -394,8 +409,11 @@ session, and drive panels with `busctl` as above):
   `DismissPanel(id)`; the notify-send fallback triggers on `RuntimeState != "live"`
   or the daemon being absent (watch `NameOwnerChanged` / `RuntimeStateChanged`).
   Delete hypxrvoice's `hud/`, `HudMessage`, and render core (now provided here).
-- **WP-H9 (hypxrkeys)** and **WP-H10 (presence-gated Notifications mirror)** follow
-  as their own milestones.
+- **WP-H9 — keystroke HUD hardening.** The film MVP now exists as
+  `hypxrhud-keys`. A future compositor-cooperative input source could replace direct
+  evdev access while preserving its model, disclosure gate, and D-Bus producer. It
+  must remain explicitly enabled and suppress capture on lock/password surfaces.
+- **WP-H10 (presence-gated Notifications mirror)** follows as its own milestone.
 
 ## Licence
 

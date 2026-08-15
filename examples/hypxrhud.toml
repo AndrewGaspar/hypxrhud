@@ -74,7 +74,7 @@ reprobe_cap_ms  = 30000
 # pose = "0,-0.28,-1.0"
 # size = 0.42
 
-# [slot.keys]            # just above voice — screenkey (hypxrkeys)
+# [slot.keys]            # just above voice — screenkey (hypxrhud-keys)
 # pose = "0,-0.14,-1.0"
 # size = 0.42
 
