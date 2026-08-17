@@ -213,12 +213,16 @@ find_program(DBUS_RUN_SESSION dbus-run-session)
 if(DBUS_RUN_SESSION)
     add_test(NAME hypxrhud_dbus_tests
              COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:hypxrhud_dbus_tests>)
-    # XDG_DATA_DIRS points nowhere so the private dbus-daemon can't see an INSTALLED
-    # activation file (/usr/local/share/dbus-1/services) and bus-activate a competing
-    # system hypxrhud that races the test's own daemon for the name. Unset would fall
-    # back to /usr/local/share:/usr/share — the exact poison.
+    # XDG_DATA_DIRS *and* XDG_DATA_HOME point nowhere so the private dbus-daemon can't see
+    # an INSTALLED activation file (/usr/local/share/dbus-1/services, or the user-local
+    # ~/.local/share/dbus-1/services a `--prefix ~/.local` install writes) and bus-activate
+    # a competing hypxrhud that races the test's own daemon for the name. Unset would fall
+    # back to /usr/local/share:/usr/share and ~/.local/share — the exact poison. On a box
+    # with a user-local install AND a live XR runtime, the activated daemon wins the race,
+    # opens a REAL overlay session, and then outlives the test: every private-bus test
+    # times out and leaks a session-holding process.
     set_tests_properties(hypxrhud_dbus_tests PROPERTIES
-        ENVIRONMENT "HYPXRHUD_BIN=$<TARGET_FILE:hypxrhud>;HYPXRHUD_DBUS_TEST_OK=1;XDG_DATA_DIRS=${CMAKE_CURRENT_BINARY_DIR}/no-xdg-data"
+        ENVIRONMENT "HYPXRHUD_BIN=$<TARGET_FILE:hypxrhud>;HYPXRHUD_DBUS_TEST_OK=1;XDG_DATA_DIRS=${CMAKE_CURRENT_BINARY_DIR}/no-xdg-data;XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/no-xdg-data"
         TIMEOUT 60)
 else()
     add_test(NAME hypxrhud_dbus_tests
@@ -239,7 +243,7 @@ if(DBUS_RUN_SESSION)
     add_test(NAME hypxrhud_keys_dbus_tests
              COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:hypxrhud_keys_dbus_tests>)
     set_tests_properties(hypxrhud_keys_dbus_tests PROPERTIES
-        ENVIRONMENT "HYPXRHUD_BIN=$<TARGET_FILE:hypxrhud>;HYPXRHUD_DBUS_TEST_OK=1;XDG_DATA_DIRS=${CMAKE_CURRENT_BINARY_DIR}/no-xdg-data"
+        ENVIRONMENT "HYPXRHUD_BIN=$<TARGET_FILE:hypxrhud>;HYPXRHUD_DBUS_TEST_OK=1;XDG_DATA_DIRS=${CMAKE_CURRENT_BINARY_DIR}/no-xdg-data;XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/no-xdg-data"
         TIMEOUT 60)
 else()
     add_test(NAME hypxrhud_keys_dbus_tests
@@ -262,7 +266,7 @@ if(DBUS_RUN_SESSION)
              COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:hypxrhud_battery_dbus_tests>)
     # Same XDG_DATA_DIRS isolation as hypxrhud_dbus_tests above.
     set_tests_properties(hypxrhud_battery_dbus_tests PROPERTIES
-        ENVIRONMENT "HYPXRHUD_BIN=$<TARGET_FILE:hypxrhud>;HYPXRHUD_DBUS_TEST_OK=1;XDG_DATA_DIRS=${CMAKE_CURRENT_BINARY_DIR}/no-xdg-data"
+        ENVIRONMENT "HYPXRHUD_BIN=$<TARGET_FILE:hypxrhud>;HYPXRHUD_DBUS_TEST_OK=1;XDG_DATA_DIRS=${CMAKE_CURRENT_BINARY_DIR}/no-xdg-data;XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/no-xdg-data"
         TIMEOUT 60)
 else()
     add_test(NAME hypxrhud_battery_dbus_tests
