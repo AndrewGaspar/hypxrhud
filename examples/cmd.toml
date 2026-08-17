@@ -1,0 +1,27 @@
+# hypxrhud-cmdlog — the hyprctl command ticker. Copy to ~/.config/hypxrhud/cmd.toml.
+# Every key is optional; a missing file simply uses these values.
+
+[cmd]
+# Which HUD slot carries the ticker. `status` is bottom-right, clear of `voice`/`keys`
+# (which a filmed session usually also has running) and of `battery` (bottom-left).
+slot = "status"
+
+# How many commands stay on screen at once, newest first (1-8).
+history = 3
+
+# How long a row lives after it was last published, ms (500-60000).
+ttl_ms = 6000
+
+# Display width in characters. Longer commands keep their HEAD and end in "..." — the head
+# is what identifies the command on camera (16-200).
+max_chars = 60
+
+# A repeat of the newest command inside this window bumps an "xN" count instead of pushing a
+# duplicate row. 0 disables coalescing (0-10000).
+coalesce_ms = 1500
+
+# Panel envelope. The panel persists while rows are live and is dismissed outright when the
+# last row expires, so only the fade in/out edges matter here.
+rise_ms = 90
+fade_ms = 300
+opacity = 0.92

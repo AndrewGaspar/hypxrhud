@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# hyprctl — hypxrhud command-ticker shim.
+#
+# Install this as an EARLIER-IN-PATH `hyprctl` (on this host: ~/.local/bin/hyprctl, which
+# shadows both /usr/bin/hyprctl and a HypXRland build tree's bin/hyprctl). It publishes the
+# command line to the hypxrhud command ticker and then EXECS the real hyprctl, so args,
+# stdin, stdout, stderr, and the exit code are the real command's, untouched.
+#
+# Invariants this script exists to protect:
+#   * the publish is fire-and-forget, backgrounded, hard-bounded (default 100 ms), with all
+#     of its own fds redirected away from the caller's pipeline;
+#   * a missing ticker, a missing busctl, or a missing bus is a silent no-op;
+#   * nothing here can change the real command's behaviour or exit status;
+#   * HYPXR_CMD_HUD=0 skips publishing entirely.
+#
+# See docs/cmd-ticker.md.
+
+set -u
+
+# ---- policy: verbs whose output is a read-only query (filming noise, never published) ----
+# One space-separated list, deliberately at the top so it is trivial to trim or extend.
+# `hyprctl -j …` (any JSON query) is skipped regardless of verb.
+HYPXR_CMD_HUD_SKIP=${HYPXR_CMD_HUD_SKIP-"version monitors clients workspaces workspacerules activewindow activeworkspace layers devices binds animations layouts instances splash cursorpos getoption systeminfo configerrors rollinglog globalshortcuts descriptions"}
+
+CMDLOG_BUS_NAME="io.github.andrewgaspar.hypxrhud.cmdlog"
+CMDLOG_BUS_PATH="/io/github/andrewgaspar/hypxrhud/cmdlog"
+CMDLOG_BUS_IFACE="io.github.andrewgaspar.hypxrhud.cmdlog1"
+
+# Hard bound on the publish (seconds, coreutils `timeout` syntax). Never raise this above a
+# fraction of a second: it is the only thing standing between a wedged bus and every
+# hyprctl on the box paying for it.
+HYPXR_CMD_HUD_TIMEOUT=${HYPXR_CMD_HUD_TIMEOUT:-0.1}
+
+# Cap the published string; the ticker truncates for display anyway.
+HYPXR_CMD_HUD_MAXLEN=${HYPXR_CMD_HUD_MAXLEN:-400}
+
+self_path=${BASH_SOURCE[0]:-$0}
+self_real=$(readlink -f -- "$self_path" 2>/dev/null) || self_real=$self_path
+
+# The real hyprctl: an explicit override, else the next `hyprctl` in PATH that is not this
+# script (so shadowing preserves exactly what the user would otherwise have run — on this
+# host that is HypXRland's build tree, not /usr/bin), else the packaged path.
+find_real_hyprctl() {
+    if [ -n "${HYPXR_CMD_HUD_REAL:-}" ]; then
+        printf '%s' "$HYPXR_CMD_HUD_REAL"
+        return
+    fi
+    local dir candidate resolved
+    local saved_ifs=$IFS
+    set -f
+    IFS=:
+    for dir in $PATH; do
+        [ -n "$dir" ] || dir=.
+        candidate=$dir/hyprctl
+        [ -x "$candidate" ] || continue
+        resolved=$(readlink -f -- "$candidate" 2>/dev/null) || resolved=$candidate
+        [ "$resolved" = "$self_real" ] && continue
+        IFS=$saved_ifs
+        set +f
+        printf '%s' "$candidate"
+        return
+    done
+    IFS=$saved_ifs
+    set +f
+    printf '%s' /usr/bin/hyprctl
+}
+
+# True when this invocation should reach the HUD.
+should_publish() {
+    [ "${HYPXR_CMD_HUD:-1}" != "0" ] || return 1
+    [ -n "${DBUS_SESSION_BUS_ADDRESS:-}${XDG_RUNTIME_DIR:-}" ] || return 1
+
+    local argument verb="" skip_next=0
+    for argument in "$@"; do
+        if [ "$skip_next" = 1 ]; then
+            skip_next=0
+            continue
+        fi
+        case $argument in
+            -j|--json) return 1 ;;                 # read-only JSON query.
+            -i|--instance) skip_next=1 ;;          # takes a value; not the verb.
+            -*) ;;                                 # any other flag: keep looking.
+            *) verb=$argument; break ;;
+        esac
+    done
+    [ -n "$verb" ] || return 1                     # bare `hyprctl`/flags only: nothing to show.
+
+    case " $HYPXR_CMD_HUD_SKIP " in
+        *" $verb "*) return 1 ;;
+    esac
+    return 0
+}
+
+# Rebuild a readable command line; quote only what needs it.
+format_command() {
+    local out=hyprctl argument
+    for argument in "$@"; do
+        case $argument in
+            "") out="$out ''" ;;
+            *[[:space:]]*|*\'*) out="$out '$argument'" ;;
+            *) out="$out $argument" ;;
+        esac
+    done
+    printf '%s' "${out:0:$HYPXR_CMD_HUD_MAXLEN}"
+}
+
+if should_publish "$@" && command -v busctl >/dev/null 2>&1; then
+    # stderr is discarded even here: a malformed HYPXR_CMD_HUD_MAXLEN must not print into
+    # the caller's terminal, it must just cost us the publish.
+    hypxr_line=$(format_command "$@" 2>/dev/null)
+    hypxr_timeout=()
+    command -v timeout >/dev/null 2>&1 && hypxr_timeout=(timeout -k 0.05 "$HYPXR_CMD_HUD_TIMEOUT")
+    # Backgrounded with every fd detached from the caller's stdin/stdout/stderr, so a
+    # `hyprctl … | head` pipeline is never held open and no diagnostic can leak into it.
+    # --expect-reply=no + --auto-start=no means an absent ticker costs one dropped message
+    # and prints nothing.
+    "${hypxr_timeout[@]}" busctl --user --quiet --expect-reply=no --auto-start=no --timeout=1 \
+        call "$CMDLOG_BUS_NAME" "$CMDLOG_BUS_PATH" "$CMDLOG_BUS_IFACE" \
+        Publish s "$hypxr_line" </dev/null >/dev/null 2>&1 &
+fi
+
+exec "$(find_real_hyprctl)" "$@"

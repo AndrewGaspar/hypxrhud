@@ -1,0 +1,22 @@
+# hypxrhud-cmdlog — the hyprctl command ticker: every hyprctl run through the PATH shim
+# appears briefly in the headset HUD so a viewer sees the commands driving the compositor.
+#
+# It is a FILMING AID, and deliberately a MANUAL, static user unit: there is no [Install]
+# section, so it is never enabled at login. With the ticker stopped, the installed
+# ~/.local/bin/hyprctl shim is a silent no-op (its fire-and-forget publish is dropped by the
+# bus because nothing owns the name), so a demo tool cannot quietly become a persistent
+# record of everything you type into hyprctl.
+#
+# Note what it shows: the command lines of hyprctl invocations that pass through the shim.
+# Keybind-dispatched actions never run hyprctl and will not appear. See docs/cmd-ticker.md.
+
+[Unit]
+Description=hypxrhud hyprctl command ticker (filming aid)
+Documentation=https://github.com/AndrewGaspar/hypxrhud
+After=graphical-session.target hypxrhud.service
+
+[Service]
+Type=simple
+ExecStart=@HYPXRHUD_BINDIR@/hypxrhud-cmdlog
+Restart=no
+NoNewPrivileges=yes

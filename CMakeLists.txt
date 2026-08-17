@@ -128,6 +128,35 @@ target_link_libraries(hypxrhud-keys PRIVATE hypxrhud_keys_runtime)
 target_compile_options(hypxrhud-keys PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 install(TARGETS hypxrhud-keys RUNTIME DESTINATION bin)
 
+# ---- hypxrhud-cmdlog: the hyprctl command ticker (filming aid) ----------------------
+# Same split as the other producers: the PURE model + config (sanitise/truncate/history/
+# expiry) unit-test without a bus; the sd-bus adapters (the ticker's own Publish endpoint +
+# the HUD panel client) live in the runtime library the executable and the private-bus
+# integration test share. See docs/cmd-ticker.md.
+add_library(hypxrhud_cmdlog_core STATIC
+    src/cmdlog/CmdLogConfig.cpp
+    src/cmdlog/CmdLogModel.cpp
+)
+target_link_libraries(hypxrhud_cmdlog_core PUBLIC hypxrhud_core)
+target_compile_options(hypxrhud_cmdlog_core PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+
+add_library(hypxrhud_cmdlog_runtime STATIC
+    src/cmdlog/CmdLogClient.cpp
+    src/cmdlog/CmdLogService.cpp
+)
+target_link_libraries(hypxrhud_cmdlog_runtime PUBLIC hypxrhud_cmdlog_core PkgConfig::libsystemd)
+target_compile_options(hypxrhud_cmdlog_runtime PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+
+add_executable(hypxrhud-cmdlog src/cmdlog/main.cpp)
+target_link_libraries(hypxrhud-cmdlog PRIVATE hypxrhud_cmdlog_runtime)
+target_compile_options(hypxrhud-cmdlog PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+install(TARGETS hypxrhud-cmdlog RUNTIME DESTINATION bin)
+
+# The PATH shim is a file literally named `hyprctl`. Installing it into <prefix>/bin would
+# silently shadow the real hyprctl for anyone who installs this project, so it lands in a
+# share/ staging directory and the integrator copies it into ~/.local/bin DELIBERATELY.
+install(PROGRAMS shim/hyprctl DESTINATION share/hypxrhud/shim)
+
 # Service/activation files carry absolute binary paths, so they are configured with the
 # actual install prefix (a hardcoded /usr/bin ExecStart 203/EXECs on the default
 # /usr/local prefix). @HYPXRHUD_BINDIR@ -> <prefix>/bin.
@@ -142,6 +171,8 @@ configure_file(systemd/hypxrhud-battery.service.in
                ${CMAKE_CURRENT_BINARY_DIR}/services/hypxrhud-battery.service @ONLY)
 configure_file(systemd/hypxrhud-keys.service.in
                ${CMAKE_CURRENT_BINARY_DIR}/services/hypxrhud-keys.service @ONLY)
+configure_file(systemd/hypxrhud-cmdlog.service.in
+               ${CMAKE_CURRENT_BINARY_DIR}/services/hypxrhud-cmdlog.service @ONLY)
 configure_file(dbus/io.github.andrewgaspar.hypxrhud.service.in
                ${CMAKE_CURRENT_BINARY_DIR}/services/io.github.andrewgaspar.hypxrhud.service @ONLY)
 
@@ -153,6 +184,10 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/services/hypxrhud-battery.service
 # start a key-capture service at login.
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/services/hypxrhud-keys.service
         DESTINATION lib/systemd/user)
+# The command ticker is a filming aid: also static/manual, so it only runs when a demo is
+# being recorded (and its shim is a no-op the rest of the time).
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/services/hypxrhud-cmdlog.service
+        DESTINATION lib/systemd/user)
 
 # ---- D-Bus service activation (WP-H3) ----
 # Bus-activated on the first CreatePanel/GetCapabilities; the SystemdService= hands off to
@@ -163,7 +198,7 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/services/hypxrhud.service
         DESTINATION lib/systemd/user)
 
 # ---- example config + licence ----
-install(FILES examples/hypxrhud.toml examples/battery.toml examples/keys.toml
+install(FILES examples/hypxrhud.toml examples/battery.toml examples/keys.toml examples/cmd.toml
         DESTINATION share/hypxrhud/examples)
 install(FILES LICENSE                 DESTINATION share/licenses/hypxrhud)
 
@@ -188,9 +223,11 @@ add_executable(hypxrhud_tests
     tests/test_arbiter.cpp   # WP-H5: slot queueing + occupancy introspection
     tests/test_battery.cpp   # battery client: model/diff/latch + config
     tests/test_keys.cpp      # keys client: strict parser/xkb/model/config/tracked source
+    tests/test_cmdlog.cpp    # command ticker: sanitise/truncate/history/expiry + config
 )
 target_include_directories(hypxrhud_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
-target_link_libraries(hypxrhud_tests PRIVATE hypxrhud_core hypxrhud_battery_core hypxrhud_keys_runtime)
+target_link_libraries(hypxrhud_tests PRIVATE hypxrhud_core hypxrhud_battery_core hypxrhud_keys_runtime
+                                             hypxrhud_cmdlog_core)
 target_compile_options(hypxrhud_tests PRIVATE -Wall -Wextra)
 add_test(NAME hypxrhud_tests COMMAND hypxrhud_tests)
 
@@ -271,4 +308,27 @@ if(DBUS_RUN_SESSION)
 else()
     add_test(NAME hypxrhud_battery_dbus_tests
              COMMAND ${CMAKE_COMMAND} -E echo "SKIP: dbus-run-session not found; battery integration test skipped")
+endif()
+
+# ---- command ticker D-Bus integration test -------------------------------------------
+# Spawns the REAL daemon (--no-xr) AND the REAL hypxrhud-cmdlog producer on a private bus,
+# then runs the REAL shim/hyprctl script against a STUB hyprctl (PATH-forced, so no test can
+# reach a live compositor). Covers publish -> rows -> panel, truncation, the skip list, the
+# HYPXR_CMD_HUD=0 kill switch, expiry-dismiss, and HUD-restart recovery.
+add_executable(hypxrhud_cmdlog_dbus_tests tests/cmdlog_integration.cpp)
+target_include_directories(hypxrhud_cmdlog_dbus_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(hypxrhud_cmdlog_dbus_tests PRIVATE hypxrhud_cmdlog_runtime)
+target_compile_options(hypxrhud_cmdlog_dbus_tests PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+
+if(DBUS_RUN_SESSION)
+    add_test(NAME hypxrhud_cmdlog_dbus_tests
+             COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:hypxrhud_cmdlog_dbus_tests>)
+    # Same XDG_DATA_DIRS + XDG_DATA_HOME activation isolation as hypxrhud_dbus_tests above.
+    set_tests_properties(hypxrhud_cmdlog_dbus_tests PROPERTIES
+        ENVIRONMENT "HYPXRHUD_BIN=$<TARGET_FILE:hypxrhud>;HYPXRHUD_CMDLOG_BIN=$<TARGET_FILE:hypxrhud-cmdlog>;HYPXRHUD_CMDLOG_SHIM=${CMAKE_CURRENT_SOURCE_DIR}/shim/hyprctl;HYPXRHUD_DBUS_TEST_OK=1;XDG_DATA_DIRS=${CMAKE_CURRENT_BINARY_DIR}/no-xdg-data;XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/no-xdg-data"
+        TIMEOUT 90)
+else()
+    add_test(NAME hypxrhud_cmdlog_dbus_tests
+             COMMAND ${CMAKE_COMMAND} -E echo "SKIP: dbus-run-session not found; command ticker integration test skipped")
 endif()

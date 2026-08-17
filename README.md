@@ -13,7 +13,8 @@ environment), **HypXRland** composites monitor quads as an overlay, and
 **hypxrhud** sits on top as a second overlay carrying the HUD.
 
 > Status: **WP-H1 … WP-H7** complete, plus the first-party **`hypxrhud-keys`**
-> ShowMeTheKey producer. The render core + multi-panel slot scene
+> ShowMeTheKey producer and the **`hypxrhud-cmdlog`** hyprctl command ticker (a filming
+> aid: see [`docs/cmd-ticker.md`](docs/cmd-ticker.md)). The render core + multi-panel slot scene
 > (H1/H2), the **D-Bus front end** (H3, `io.github.andrewgaspar.hypxrhud`), the
 > **persistent lifecycle + re-probe backoff** (H4), the **slot arbiter polish**
 > (H5 — queueing + occupancy introspection), **Omarchy theming** (H6 — live palette
@@ -151,6 +152,26 @@ is logged.
 See [`docs/keys-overlay.md`](docs/keys-overlay.md) for the privacy model, config, tests, and
 film-ready commands.
 
+### `hypxrhud-cmdlog` (the hyprctl command ticker)
+
+`hypxrhud-cmdlog` is the filming companion to the keystroke overlay: it shows the **last
+three `hyprctl` command lines**, newest first, each for about six seconds, in the
+head-locked `status` slot — so a recording shows the commands that are driving the
+compositor as they take effect. A `hyprctl` **PATH shim** (`shim/hyprctl`, installed by hand
+at `~/.local/bin/hyprctl`) fires a fire-and-forget `Publish` at the producer and then
+**execs the real hyprctl**, leaving argv, stdin, stdout, and the exit code untouched; the
+publish is backgrounded, hard-bounded at 100 ms, and a silent no-op when the ticker is not
+running. `HYPXR_CMD_HUD=0` is the kill switch, and read-only queries (`-j …`, `monitors`,
+`clients`, …) are skipped by a list at the top of the shim.
+
+It is a producer daemon rather than a one-shot `busctl` because hypxrhud auto-dismisses a
+client's panels when that client disconnects — the long-lived owner is what lets a command
+stay on screen, and where the history/expiry/truncation model lives. Keybind-dispatched
+actions never run `hyprctl` and therefore never appear. Config: `examples/cmd.toml`
+(`[cmd]`, `~/.config/hypxrhud/cmd.toml`); unit: `systemd/hypxrhud-cmdlog.service` (static,
+like the keys unit). `hypxrhud-cmdlog --rows` prints what the HUD is showing without a
+headset. See [`docs/cmd-ticker.md`](docs/cmd-ticker.md).
+
 ## Building
 
 Requirements: a C++23 compiler, CMake ≥ 3.20, `jansson` (interim wire format),
@@ -191,6 +212,10 @@ build/hypxrhud --no-xr
 
 # Manual keystroke overlay. It shows an in-HUD disclosure before capture starts.
 build/hypxrhud-keys --mods-only
+
+# The hyprctl command ticker (filming aid). Pair it with the ~/.local/bin/hyprctl shim.
+build/hypxrhud-cmdlog --verbose
+build/hypxrhud-cmdlog --rows          # what the HUD is showing, no headset needed
 
 # One-command health check: spins a PRIVATE bus, spawns the daemon (--no-xr), runs a
 # create/update/dismiss + capabilities round-trip, exits 0 (healthy) or nonzero.
@@ -397,6 +422,10 @@ session, and drive panels with `busctl` as above):
 - [ ] While `hypxrhud-keys` is capturing, remove or preempt its exact panel and then
       disconnect the runtime; each event must stop the tracked ShowMeTheKey child and
       require a deliberate restart.
+- [ ] Start `hypxrhud-cmdlog` with the `~/.local/bin/hyprctl` shim installed; a typed
+      `hyprctl dispatch …` appears bottom-right within a frame or two, three commands stack
+      newest-first, each fades after its TTL, and the panel disappears entirely once the
+      last one expires. `HYPXR_CMD_HUD=0 hyprctl …` shows nothing and still runs.
 - [ ] `SIGTERM` ends the session cleanly and releases the bus name.
 
 ## Seams left for later milestones
